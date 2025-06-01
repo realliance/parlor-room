@@ -15,14 +15,14 @@ pub type LobbyId = Uuid;
 pub type GameId = Uuid;
 
 /// Type of participant in the matchmaking system
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PlayerType {
     Human,
     Bot,
 }
 
 /// Type of lobby a player wants to join
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum LobbyType {
     AllBot,
     General,
@@ -42,6 +42,15 @@ impl std::fmt::Display for LobbyType {
 pub struct PlayerRating {
     pub rating: f64,
     pub uncertainty: f64,
+}
+
+impl Default for PlayerRating {
+    fn default() -> Self {
+        Self {
+            rating: 1500.0,
+            uncertainty: 200.0,
+        }
+    }
 }
 
 impl From<WengLinRating> for PlayerRating {

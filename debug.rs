@@ -1,0 +1,1 @@
+fn main() { let rating_diff = (1500.0 - 1800.0_f64).abs(); let combined_uncertainty = 150.0 + 150.0; let tolerance = 2.0 * combined_uncertainty / 2.0; println!("rating_diff: {}, tolerance: {}, compatible: {}", rating_diff, tolerance, rating_diff <= tolerance); }
