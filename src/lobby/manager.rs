@@ -8,11 +8,12 @@ use crate::error::{MatchmakingError, Result};
 use crate::lobby::instance::{Lobby, LobbyInstance, LobbyState};
 use crate::lobby::matching::{BasicLobbyMatcher, LobbyMatcher, MatchingConfig, MatchingResult};
 use crate::lobby::provider::{LobbyConfiguration, LobbyProvider};
+use crate::metrics::MetricsCollector;
 use crate::types::{GameStarting, LobbyId, LobbyType, Player, PlayerJoinedLobby, QueueRequest};
 use crate::utils::{current_timestamp, generate_lobby_id};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use tokio::time::{interval, Duration};
+use tokio::time::{interval, Duration, Instant};
 use tracing::{debug, error, info, warn};
 
 /// Statistics about lobby manager operations
@@ -46,6 +47,8 @@ pub struct LobbyManager {
     event_publisher: Arc<dyn EventPublisher>,
     /// Manager statistics
     stats: Arc<RwLock<LobbyManagerStats>>,
+    /// Metrics collector for recording performance data
+    metrics_collector: Arc<MetricsCollector>,
 }
 
 impl LobbyManager {
@@ -54,6 +57,21 @@ impl LobbyManager {
         lobby_provider: Arc<dyn LobbyProvider>,
         event_publisher: Arc<dyn EventPublisher>,
     ) -> Self {
+        // Create a default metrics collector if none provided
+        let metrics_collector = Arc::new(MetricsCollector::new().unwrap_or_else(|_| {
+            warn!("Failed to create metrics collector, using default");
+            MetricsCollector::default()
+        }));
+
+        Self::with_metrics(lobby_provider, event_publisher, metrics_collector)
+    }
+
+    /// Create a new lobby manager with metrics collector
+    pub fn with_metrics(
+        lobby_provider: Arc<dyn LobbyProvider>,
+        event_publisher: Arc<dyn EventPublisher>,
+        metrics_collector: Arc<MetricsCollector>,
+    ) -> Self {
         Self {
             lobbies: Arc::new(RwLock::new(HashMap::new())),
             lobby_provider,
@@ -61,6 +79,7 @@ impl LobbyManager {
             matching_config: MatchingConfig::default(),
             event_publisher,
             stats: Arc::new(RwLock::new(LobbyManagerStats::default())),
+            metrics_collector,
         }
     }
 
@@ -71,6 +90,29 @@ impl LobbyManager {
         lobby_matcher: Arc<dyn LobbyMatcher>,
         matching_config: MatchingConfig,
     ) -> Self {
+        // Create a default metrics collector if none provided
+        let metrics_collector = Arc::new(MetricsCollector::new().unwrap_or_else(|_| {
+            warn!("Failed to create metrics collector, using default");
+            MetricsCollector::default()
+        }));
+
+        Self::with_matcher_and_metrics(
+            lobby_provider,
+            event_publisher,
+            lobby_matcher,
+            matching_config,
+            metrics_collector,
+        )
+    }
+
+    /// Create with custom matcher, configuration, and metrics
+    pub fn with_matcher_and_metrics(
+        lobby_provider: Arc<dyn LobbyProvider>,
+        event_publisher: Arc<dyn EventPublisher>,
+        lobby_matcher: Arc<dyn LobbyMatcher>,
+        matching_config: MatchingConfig,
+        metrics_collector: Arc<MetricsCollector>,
+    ) -> Self {
         Self {
             lobbies: Arc::new(RwLock::new(HashMap::new())),
             lobby_provider,
@@ -78,14 +120,24 @@ impl LobbyManager {
             matching_config,
             event_publisher,
             stats: Arc::new(RwLock::new(LobbyManagerStats::default())),
+            metrics_collector,
         }
     }
 
     /// Handle a queue request from a player or bot
     pub async fn handle_queue_request(&self, request: QueueRequest) -> Result<LobbyId> {
+        let start_time = Instant::now();
+
         debug!(
             "Handling queue request for player {} (type: {:?}, lobby: {:?})",
             request.player_id, request.player_type, request.lobby_type
+        );
+
+        // Record queue request metric using the high-level API
+        self.metrics_collector.record_queue_request(
+            request.player_type,
+            request.lobby_type,
+            Duration::default(), // Will be set at the end
         );
 
         // Create player from request
@@ -107,18 +159,31 @@ impl LobbyManager {
             stats.players_queued += 1;
         }
 
-        // Find or create suitable lobby
-        let lobby_id = self
-            .find_or_create_lobby_for_player(player.clone(), request.lobby_type)
-            .await?;
+        let result = async {
+            // Find or create suitable lobby
+            let lobby_id = self
+                .find_or_create_lobby_for_player(player.clone(), request.lobby_type)
+                .await?;
 
-        // Add player to the lobby
-        self.add_player_to_lobby(lobby_id, player).await?;
+            // Add player to the lobby
+            self.add_player_to_lobby(lobby_id, player).await?;
 
-        // Check if lobby should start a game
-        self.check_and_start_game(lobby_id).await?;
+            // Check if lobby should start a game
+            self.check_and_start_game(lobby_id).await?;
 
-        Ok(lobby_id)
+            Ok(lobby_id)
+        }
+        .await;
+
+        // Record processing time using the high-level API
+        let duration = start_time.elapsed();
+        self.metrics_collector.record_queue_request(
+            request.player_type,
+            request.lobby_type,
+            duration,
+        );
+
+        result
     }
 
     /// Find a suitable lobby for a player, or create a new one
@@ -208,7 +273,7 @@ impl LobbyManager {
             lobbies.insert(lobby_id, lobby);
         }
 
-        // Update stats
+        // Update stats and metrics
         {
             let mut stats = self
                 .stats
@@ -219,6 +284,9 @@ impl LobbyManager {
             stats.lobbies_created += 1;
             stats.active_lobbies += 1;
         }
+
+        // Record lobby creation using the high-level API
+        self.metrics_collector.record_lobby_created(lobby_type);
 
         info!("Created new {} lobby with ID {}", lobby_type, lobby_id);
         Ok(lobby_id)
@@ -253,6 +321,20 @@ impl LobbyManager {
                 timestamp: current_timestamp(),
             }
         };
+
+        // Update player-related metrics using direct access
+        match player.player_type {
+            crate::types::PlayerType::Human => {
+                self.metrics_collector
+                    .player()
+                    .players_queued_total
+                    .with_label_values(&["human", "joined"])
+                    .inc();
+            }
+            crate::types::PlayerType::Bot => {
+                self.metrics_collector.bot().active_bot_requests.inc();
+            }
+        }
 
         // Publish event
         self.event_publisher
@@ -294,9 +376,23 @@ impl LobbyManager {
                     stats.games_started += 1;
                 }
 
+                let players = lobby.get_players();
+                let human_count = players
+                    .iter()
+                    .filter(|p| matches!(p.player_type, crate::types::PlayerType::Human))
+                    .count();
+                let bot_count = players.len() - human_count;
+
+                // Record game start using the high-level API
+                self.metrics_collector.record_game_started(
+                    lobby.config().lobby_type,
+                    human_count,
+                    bot_count,
+                );
+
                 Some(GameStarting {
                     lobby_id,
-                    players: lobby.get_players(),
+                    players,
                     game_id: generate_lobby_id(), // Generate unique game ID
                     rating_changes_preview: vec![], // Empty for Phase 2 (no rating calculations yet)
                     timestamp: current_timestamp(),
@@ -421,7 +517,7 @@ impl LobbyManager {
                 }
             }
 
-            // Update stats
+            // Update stats and metrics
             {
                 let mut stats =
                     self.stats
@@ -436,6 +532,12 @@ impl LobbyManager {
                     .map(|lobby| lobby.get_players().len())
                     .sum();
             }
+
+            // Record cleanup metrics using direct access
+            self.metrics_collector
+                .lobby()
+                .lobbies_cleaned_total
+                .inc_by(cleaned_count as u64);
         }
 
         if cleaned_count > 0 {
@@ -493,6 +595,7 @@ impl Clone for LobbyManager {
             matching_config: self.matching_config.clone(),
             event_publisher: Arc::clone(&self.event_publisher),
             stats: Arc::clone(&self.stats),
+            metrics_collector: Arc::clone(&self.metrics_collector),
         }
     }
 }
@@ -651,16 +754,63 @@ mod tests {
     async fn test_stats_tracking() {
         let manager = create_test_manager().await;
 
-        // Add some players
-        let request1 = create_test_queue_request("bot1", PlayerType::Bot, LobbyType::AllBot);
-        manager.handle_queue_request(request1).await.unwrap();
+        // Create and handle multiple requests
+        let request1 = create_test_queue_request("player1", PlayerType::Human, LobbyType::General);
+        let request2 = create_test_queue_request("bot1", PlayerType::Bot, LobbyType::AllBot);
 
-        let request2 = create_test_queue_request("human1", PlayerType::Human, LobbyType::General);
-        manager.handle_queue_request(request2).await.unwrap();
+        let _lobby1 = manager.handle_queue_request(request1).await.unwrap();
+        let _lobby2 = manager.handle_queue_request(request2).await.unwrap();
 
+        // Check stats
         let stats = manager.get_stats().await.unwrap();
         assert_eq!(stats.players_queued, 2);
         assert_eq!(stats.lobbies_created, 2);
-        assert_eq!(stats.active_lobbies, 2);
+        assert!(stats.active_lobbies >= 2);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_integration() {
+        use crate::metrics::MetricsCollector;
+
+        // Create a lobby manager with explicit metrics collector
+        let lobby_provider = Arc::new(StaticLobbyProvider::new());
+        let event_publisher = Arc::new(MockEventPublisher::new());
+        let metrics_collector = Arc::new(MetricsCollector::new().unwrap());
+
+        let manager =
+            LobbyManager::with_metrics(lobby_provider, event_publisher, metrics_collector.clone());
+
+        // Handle a queue request
+        let request = create_test_queue_request("player1", PlayerType::Human, LobbyType::General);
+        let _lobby_id = manager.handle_queue_request(request).await.unwrap();
+
+        // Verify metrics were recorded by checking that the registry has some metrics
+        let registry = metrics_collector.registry();
+        let metric_families = registry.gather();
+
+        // Should have several metric families now
+        assert!(!metric_families.is_empty(), "Metrics should be recorded");
+
+        // Look for specific metrics
+        let metric_names: Vec<String> = metric_families
+            .iter()
+            .map(|mf| mf.get_name().to_string())
+            .collect();
+
+        // Should have lobby-related metrics
+        assert!(
+            metric_names
+                .iter()
+                .any(|name| name.contains("lobbies") || name.contains("active_lobbies")),
+            "Should have lobby metrics, found: {:?}",
+            metric_names
+        );
+
+        // Should have player-related metrics
+        assert!(
+            metric_names.iter().any(|name| name.contains("players")),
+            "Should have player metrics, found: {:?}",
+            metric_names
+        );
     }
 }

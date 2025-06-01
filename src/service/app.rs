@@ -13,6 +13,8 @@ use crate::config::AppConfig;
 use crate::lobby::instance::Lobby;
 use crate::lobby::manager::LobbyManager;
 use crate::lobby::provider::StaticLobbyProvider;
+use crate::metrics::health::HealthServerConfig;
+use crate::metrics::{HealthServer, MetricsCollector, MetricsService};
 use crate::rating::{ExtendedWengLinConfig, InMemoryRatingStorage, WengLinRatingCalculator};
 use crate::wait_time::calculator::{DynamicWaitTimeCalculator, WaitTimeConfig};
 use crate::wait_time::provider::InternalWaitTimeProvider;
@@ -22,6 +24,7 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
+use tokio::time::Duration;
 use tracing::{error, info, warn};
 
 /// Service-level errors
@@ -51,6 +54,9 @@ pub struct AppState {
     /// AMQP connection for message handling
     amqp_connection: Arc<AmqpConnection>,
 
+    /// Metrics service for monitoring and health checks
+    metrics_service: Arc<MetricsService>,
+
     /// Background task handles
     background_tasks: Vec<JoinHandle<()>>,
 
@@ -70,14 +76,22 @@ impl AppState {
         // Initialize AMQP connection
         let amqp_connection = Self::initialize_amqp(&config).await?;
 
-        // Initialize all core components
-        let lobby_manager =
-            Self::initialize_matchmaking_system(&config, amqp_connection.clone()).await?;
+        // Initialize metrics service
+        let metrics_service = Self::initialize_metrics(&config).await?;
+
+        // Initialize all core components with metrics
+        let lobby_manager = Self::initialize_matchmaking_system(
+            &config,
+            amqp_connection.clone(),
+            metrics_service.collector(),
+        )
+        .await?;
 
         Ok(Self {
             config,
             lobby_manager,
             amqp_connection,
+            metrics_service,
             background_tasks: Vec::new(),
             is_running: Arc::new(RwLock::new(false)),
         })
@@ -89,6 +103,9 @@ impl AppState {
 
         // Mark as running
         *self.is_running.write().await = true;
+
+        // Start metrics service first
+        self.start_metrics_service().await?;
 
         // Start AMQP message consumption
         self.start_amqp_consumption().await?;
@@ -109,6 +126,11 @@ impl AppState {
 
         // Stop background tasks
         self.stop_background_tasks().await;
+
+        // Stop metrics service
+        if let Err(e) = self.metrics_service.stop().await {
+            warn!("Failed to stop metrics service: {}", e);
+        }
 
         // Get final statistics
         let final_stats = {
@@ -140,6 +162,54 @@ impl AppState {
     /// Get lobby manager for operations
     pub fn lobby_manager(&self) -> Arc<RwLock<LobbyManager>> {
         self.lobby_manager.clone()
+    }
+
+    /// Get metrics service
+    pub fn metrics_service(&self) -> Arc<MetricsService> {
+        self.metrics_service.clone()
+    }
+
+    /// Initialize metrics service
+    async fn initialize_metrics(config: &AppConfig) -> Result<Arc<MetricsService>, ServiceError> {
+        info!(
+            "Initializing metrics service on port {}",
+            config.service.metrics_port
+        );
+
+        let metrics_collector =
+            Arc::new(
+                MetricsCollector::new().map_err(|e| ServiceError::Initialization {
+                    message: format!("Failed to create metrics collector: {}", e),
+                })?,
+            );
+
+        let health_config = HealthServerConfig {
+            port: config.service.metrics_port,
+            host: "0.0.0.0".to_string(),
+        };
+
+        let health_server = Arc::new(HealthServer::new(health_config, metrics_collector.clone()));
+        let metrics_service = Arc::new(MetricsService::new(metrics_collector, health_server));
+
+        Ok(metrics_service)
+    }
+
+    /// Start metrics service
+    async fn start_metrics_service(&self) -> Result<(), ServiceError> {
+        info!("Starting metrics and health endpoints");
+
+        self.metrics_service
+            .start()
+            .await
+            .map_err(|e| ServiceError::Initialization {
+                message: format!("Failed to start metrics service: {}", e),
+            })?;
+
+        info!(
+            "✅ Metrics service started on port {}",
+            self.config.service.metrics_port
+        );
+        Ok(())
     }
 
     /// Initialize AMQP connection with retry logic
@@ -220,6 +290,7 @@ impl AppState {
     async fn initialize_matchmaking_system(
         config: &AppConfig,
         amqp_connection: Arc<AmqpConnection>,
+        metrics_collector: Arc<MetricsCollector>,
     ) -> Result<Arc<RwLock<LobbyManager>>, ServiceError> {
         info!("Initializing matchmaking system components");
 
@@ -293,7 +364,8 @@ impl AppState {
 
         // Initialize lobby system
         let lobby_provider = Arc::new(StaticLobbyProvider::new());
-        let lobby_manager = LobbyManager::new(lobby_provider, event_publisher);
+        let lobby_manager =
+            LobbyManager::with_metrics(lobby_provider, event_publisher, metrics_collector);
 
         Ok(Arc::new(RwLock::new(lobby_manager)))
     }
@@ -312,6 +384,34 @@ impl AppState {
     /// Start background maintenance tasks
     async fn start_background_tasks(&mut self) -> Result<(), ServiceError> {
         info!("Starting background maintenance tasks");
+
+        // Metrics update task
+        let metrics_task = {
+            let lobby_manager = self.lobby_manager.clone();
+            let metrics_collector = self.metrics_service.collector();
+            let is_running = self.is_running.clone();
+
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(30));
+
+                while *is_running.read().await {
+                    interval.tick().await;
+
+                    // Update metrics from lobby manager stats
+                    let manager = lobby_manager.read().await;
+                    match manager.get_stats().await {
+                        Ok(stats) => {
+                            metrics_collector.update_from_lobby_stats(&stats);
+                        }
+                        Err(e) => {
+                            warn!("Failed to get lobby stats for metrics update: {}", e);
+                        }
+                    }
+                }
+
+                info!("Metrics update task stopped");
+            })
+        };
 
         // Lobby cleanup task
         let cleanup_task = {
@@ -374,8 +474,42 @@ impl AppState {
             None
         };
 
+        // Service health metrics task
+        let health_metrics_task = {
+            let metrics_collector = self.metrics_service.collector();
+            let is_running = self.is_running.clone();
+
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(60));
+                let start_time = tokio::time::Instant::now();
+
+                while *is_running.read().await {
+                    interval.tick().await;
+
+                    // Update service uptime
+                    let uptime_seconds = start_time.elapsed().as_secs() as i64;
+                    metrics_collector
+                        .service()
+                        .uptime_seconds
+                        .set(uptime_seconds);
+
+                    // Update health status (assume healthy for now)
+                    metrics_collector.update_health_status(2); // 2 = healthy
+
+                    // Update component health
+                    metrics_collector.update_component_health("amqp", true);
+                    metrics_collector.update_component_health("lobby_manager", true);
+                    metrics_collector.update_component_health("metrics", true);
+                }
+
+                info!("Health metrics task stopped");
+            })
+        };
+
         // Add tasks to background handles
+        self.background_tasks.push(metrics_task);
         self.background_tasks.push(cleanup_task);
+        self.background_tasks.push(health_metrics_task);
         if let Some(task) = backfill_task {
             self.background_tasks.push(task);
         }

@@ -173,3 +173,96 @@ src/
 2. **Rating Algorithms**: Implement `RatingCalculator` trait
 3. **Bot Providers**: Implement `BotProvider` trait for different bot sources
 4. **Event Types**: Add new events to `amqp::messages` module
+
+## Metrics and Monitoring
+
+The parlor-room service includes comprehensive metrics collection and monitoring capabilities:
+
+### Metrics Endpoints
+
+- **Health Check**: `GET /health` - Service health status
+- **Readiness**: `GET /ready` - Service readiness status
+- **Liveness**: `GET /alive` - Service liveness status
+- **Prometheus Metrics**: `GET /metrics` - Prometheus-formatted metrics
+- **Statistics**: `GET /stats` - Human-readable service statistics
+
+### Available Metrics
+
+#### Service Metrics
+
+- `parlor_room_uptime_seconds` - Service uptime in seconds
+- `parlor_room_health_status` - Overall health status (0=unhealthy, 1=degraded, 2=healthy)
+- `parlor_room_amqp_messages_total` - Total AMQP messages processed
+- `parlor_room_amqp_errors_total` - AMQP processing errors
+
+#### Lobby Metrics
+
+- `parlor_room_active_lobbies` - Number of active lobbies by type
+- `parlor_room_lobbies_created_total` - Total lobbies created by type
+- `parlor_room_lobbies_cleaned_total` - Total lobbies cleaned up
+- `parlor_room_games_started_total` - Total games started by lobby type
+- `parlor_room_lobby_utilization` - Lobby capacity utilization (0.0 to 1.0)
+
+#### Player Metrics
+
+- `parlor_room_players_queued_total` - Total players queued by type and lobby
+- `parlor_room_players_waiting` - Players currently waiting in queue
+- `parlor_room_players_matched_total` - Total players matched and started games
+- `parlor_room_queue_wait_time_seconds` - Player queue wait time distribution
+
+#### Bot Metrics
+
+- `parlor_room_active_bot_requests` - Active bot queue requests
+- `parlor_room_backfill_operations_total` - Bot backfill operations by status
+- `parlor_room_bot_utilization` - Bot utilization in lobbies by type
+- `parlor_room_bot_auth_failures_total` - Bot authentication failures
+
+#### Performance Metrics
+
+- `parlor_room_queue_processing_duration_seconds` - Queue request processing time
+- `parlor_room_rating_calculation_duration_seconds` - Rating calculation time
+- `parlor_room_lobby_operation_duration_seconds` - Lobby operation durations
+- `parlor_room_memory_usage_bytes` - Memory usage
+- `parlor_room_thread_pool_active` - Active threads
+
+### Configuration
+
+Metrics are enabled by default and can be configured via:
+
+```toml
+[service]
+metrics_port = 9090  # Port for metrics endpoints
+```
+
+Or via environment variables:
+
+```bash
+METRICS_PORT=9090
+```
+
+Or via command line:
+
+```bash
+parlor-room --metrics-port 9090
+```
+
+### Integration with Monitoring Systems
+
+The metrics endpoint (`/metrics`) provides Prometheus-compatible metrics that can be scraped by:
+
+- Prometheus
+- Grafana
+- DataDog
+- New Relic
+- Any monitoring system that supports Prometheus format
+
+Example Prometheus scrape configuration:
+
+```yaml
+scrape_configs:
+  - job_name: "parlor-room"
+    static_configs:
+      - targets: ["localhost:9090"]
+    scrape_interval: 15s
+    metrics_path: /metrics
+```
