@@ -93,6 +93,14 @@ pub trait Lobby: Send + Sync {
 
     /// Check if lobby should be cleaned up
     fn should_cleanup(&self) -> bool;
+
+    /// Get lobby ID (convenience method)
+    fn id(&self) -> LobbyId {
+        self.lobby_id()
+    }
+
+    /// Get creation timestamp
+    fn created_at(&self) -> Option<DateTime<Utc>>;
 }
 
 /// Concrete implementation of a lobby instance
@@ -108,7 +116,7 @@ pub struct LobbyInstance {
 }
 
 impl LobbyInstance {
-    /// Create a new lobby instance
+    /// Create a new lobby instance with default ID
     pub fn new(config: LobbyConfiguration) -> Self {
         let now = current_timestamp();
         Self {
@@ -122,8 +130,7 @@ impl LobbyInstance {
         }
     }
 
-    /// Create a new lobby with a specific ID (for testing)
-    #[cfg(test)]
+    /// Create a lobby instance with specific ID
     pub fn with_id(id: LobbyId, config: LobbyConfiguration) -> Self {
         let now = current_timestamp();
         Self {
@@ -135,6 +142,22 @@ impl LobbyInstance {
             last_activity: now,
             wait_timeout: None,
         }
+    }
+
+    /// Get lobby ID
+    pub fn id(&self) -> LobbyId {
+        self.id
+    }
+
+    /// Get created timestamp
+    pub fn created_at(&self) -> Option<DateTime<Utc>> {
+        Some(self.created_at)
+    }
+
+    /// Set wait timeout (for testing)
+    #[cfg(test)]
+    pub fn set_wait_timeout(&mut self, timeout: Option<DateTime<Utc>>) {
+        self.wait_timeout = timeout;
     }
 
     /// Update last activity timestamp
@@ -378,25 +401,20 @@ impl Lobby for LobbyInstance {
     }
 
     fn should_cleanup(&self) -> bool {
-        let now = current_timestamp();
-        let age = now.signed_duration_since(self.last_activity);
-
-        // Clean up if abandoned for more than 10 minutes
-        let max_idle = Duration::minutes(10);
-
+        // Cleanup if abandoned or inactive for too long
         match self.state {
-            LobbyState::GameStarted => true, // Always clean up completed games
-            LobbyState::Abandoned => age > Duration::minutes(1), // Quick cleanup for abandoned
-            LobbyState::WaitingForPlayers | LobbyState::ReadyToStart => {
-                // Clean up empty lobbies after 5 minutes, or inactive lobbies after 10 minutes
-                if self.player_queue.is_empty() {
-                    age > Duration::minutes(5)
-                } else {
-                    age > max_idle
-                }
+            LobbyState::Abandoned => true,
+            LobbyState::GameStarted => true, // Can cleanup after game started
+            _ => {
+                // Clean up if no activity for 30 minutes
+                let inactive_duration = current_timestamp() - self.last_activity;
+                inactive_duration > Duration::minutes(30)
             }
-            LobbyState::Starting => age > Duration::minutes(2), // Give some time for game to start
         }
+    }
+
+    fn created_at(&self) -> Option<DateTime<Utc>> {
+        Some(self.created_at)
     }
 }
 

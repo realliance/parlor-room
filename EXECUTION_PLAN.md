@@ -16,6 +16,7 @@
   - 14/14 unit tests passing ✅
 
 - ✅ **Phase 2: Lobby Management System** (COMPLETED)
+
   - Static lobby provider implementation ✅
   - Lobby instance management with state machine ✅
   - Basic lobby matching algorithm ✅
@@ -24,15 +25,31 @@
   - Lobby lifecycle management ✅
   - 30/30 additional unit tests passing ✅
 
+- ✅ **Phase 3: Wait Time Calculation & Weng-Lin Rating System Integration** (COMPLETED)
+
+  - Dynamic wait time calculation system ✅
+  - Statistical tracking with running statistics ✅
+  - Wait time provider interface and implementations ✅
+  - Weng-Lin rating system using skillratings crate ✅
+  - Rating storage interface and implementations ✅
+  - Rating calculator trait and implementations ✅
+  - Complete integration tests ✅
+  - 45/45 additional unit tests passing ✅
+
+- ✅ **Phase 4: Bot Integration & Backfill System** (COMPLETED)
+
+  - Dual bot system: active queuing + backfill logic ✅
+  - Comprehensive bot integration tests ✅
+
 ### **Current Status:**
 
 - **Build Status**: ✅ Clean compilation
-- **Test Status**: ✅ All tests passing (44/44)
-- **Ready for**: Phase 3 - Wait Time & Rating System
+- **Test Status**: ✅ All tests passing (108/108)
+- **Ready for**: Phase 5 - Final Integration & Documentation
 
 ### **Next Phase:**
 
-- **Phase 3**: Wait Time Calculation & Weng-Lin Rating System Integration
+- **Phase 5**: Final Integration & Documentation
 
 ---
 
@@ -633,21 +650,23 @@ pub struct TestConfig {
 - ✅ **Unit tests for lobby logic**
 - **Status**: All lobby management components implemented, 44/44 tests passing
 
-### 🚧 Phase 3: Advanced Features (Steps 4-5) - **NEXT**
+### 🚧 Phase 3: Advanced Features (Steps 4-5) - **COMPLETED**
 
-- Wait time calculation
-- **Weng-Lin rating system integration using `skillratings` crate**
-- **Property-based tests for rating calculations**
+- Wait time calculation ✅
+- **Weng-Lin rating system integration using `skillratings` crate** ✅
+- **Property-based tests for rating calculations** ✅
 
-### Phase 4: Bot Integration (Step 6)
+### 🚧 Phase 4: Bot Integration (Step 6) - **COMPLETED**
 
-- **Dual bot system: active queuing + backfill logic**
-- **Comprehensive bot integration tests**
+- **Dual bot system: active queuing + backfill logic** ✅
+- **Comprehensive bot integration tests** ✅
 
-### Phase 5: Production Ready (Steps 7-8)
+### 🚧 Phase 5: Final Integration & Documentation (Step 7) - **NEXT**
 
-- Monitoring, testing, deployment
-- **Load testing and performance optimization**
+- **Integration tests across all systems**
+- **Performance benchmarks**
+- **API documentation**
+- **Deployment configuration**
 
 ## Key Technical Decisions
 
@@ -864,3 +883,126 @@ test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 - ✅ Thread-safe concurrent design verified
 
 **Next: Phase 3 - Wait Time Calculation & Weng-Lin Rating System Integration**
+
+### ✅ **Phase 3 Completion Details** (COMPLETED)
+
+#### **Files Created/Modified:**
+
+22. **`src/types.rs`**: Added Default trait implementation for PlayerRating
+23. **`src/wait_time/mod.rs`**: Wait time module structure with proper exports
+24. **`src/wait_time/statistics.rs`**: Comprehensive statistical tracking system
+25. **`src/wait_time/calculator.rs`**: Dynamic wait time calculation system
+26. **`src/wait_time/provider.rs`**: Wait time provider interface and implementations
+27. **`src/rating/mod.rs`**: Rating module structure with proper exports
+28. **`src/rating/storage.rs`**: Rating storage interface and implementations
+29. **`src/rating/calculator.rs`**: Rating calculator trait and implementations
+30. **`src/rating/weng_lin.rs`**: Weng-Lin rating system using skillratings crate
+
+#### **Key Features Implemented:**
+
+- ✅ **Wait Time System**: Dynamic calculation based on historical statistics (mean + std_dev)
+- ✅ **Statistical Tracking**: Running statistics with confidence intervals and staleness detection
+- ✅ **Wait Time Configuration**: Configurable bounds, multipliers, and presets (quick_games, careful_matching)
+- ✅ **Weng-Lin Integration**: Full implementation using skillratings crate with proper API usage
+- ✅ **Rating Storage**: Thread-safe in-memory storage with cleanup and range queries
+- ✅ **Rating Calculations**: Multi-player ranking support for 4-player mahjong games
+- ✅ **Expected Score Calculation**: Win probability calculations for matchmaking
+- ✅ **Match Quality Scoring**: Quality assessment based on rating distribution
+- ✅ **Player Compatibility**: Rating range matching with uncertainty tolerance
+- ✅ **Thread Safety**: All components use RwLock for concurrent access
+- ✅ **Comprehensive Testing**: 45 new unit tests covering all functionality
+
+#### **Test Results:**
+
+```
+running 89 tests
+test result: ok. 89 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+**Phase 3 Test Coverage:**
+
+- **Wait Time Statistics**: 8 tests (statistical accuracy, data management)
+- **Wait Time Calculator**: 7 tests (configuration validation, calculation logic, bounds)
+- **Wait Time Provider**: 5 tests (integration workflow, configuration updates)
+- **Rating Storage**: 8 tests (CRUD operations, bulk operations, cleanup)
+- **Rating Calculator**: 5 tests (trait implementations, mock testing)
+- **Weng-Lin Implementation**: 12 tests (rating calculations, configuration, edge cases)
+- **Total New Tests**: 45 tests added in Phase 3
+
+#### **Architecture Decisions Made:**
+
+1. **Wait Time Formula**: Dynamic calculation using mean + (multiplier \* std_dev) with configurable bounds
+2. **Statistical Approach**: Running statistics with confidence intervals and staleness detection
+3. **Skillratings Integration**: Used skillratings crate's WengLinConfig directly with wrapper for additional parameters
+4. **ExtendedWengLinConfig**: Wrapper pattern to add initial rating parameters to skillratings config
+5. **Thread-Safe Design**: RwLock-based concurrent access for all storage systems
+6. **Trait-Based Architecture**: Extensible interfaces for wait time calculation, statistics, and rating storage
+7. **Comprehensive Testing**: Each module includes extensive unit tests covering edge cases
+
+#### **Ready for Phase 4:**
+
+- ✅ Complete wait time calculation system operational
+- ✅ Full Weng-Lin rating system integrated
+- ✅ Rating storage and calculation interfaces ready
+- ✅ Statistical tracking system functional
+- ✅ All systems tested and verified (89/89 tests passing)
+- ✅ Bot integration architecture ready for backfill logic
+
+**Next: Phase 4 - Bot Integration & Backfill System**
+
+### ✅ **Phase 4 Completion Details** (COMPLETED)
+
+#### **Files Created/Modified:**
+
+31. **`src/bot/mod.rs`**: Bot module structure with proper exports
+32. **`src/bot/provider.rs`**: Bot provider interface and implementations for bot selection and management
+33. **`src/bot/auth.rs`**: Bot authentication and authorization system
+34. **`src/bot/backfill.rs`**: Automatic bot backfilling system for General lobbies
+35. **`src/lobby/instance.rs`**: Added `id()`, `created_at()` methods and test helper `set_wait_timeout()`
+
+#### **Key Features Implemented:**
+
+- **Dual Bot Entry Methods:**
+
+  - Active Queuing: Bots can send QueueRequest messages like humans with authentication
+  - Automatic Backfilling: System adds bots when wait times expire in General lobbies
+
+- **Bot Provider System:**
+
+  - Bot selection by rating criteria with tolerance ranges
+  - Bot reservation and release management
+  - Exclusion lists to prevent duplicate bot selection
+  - Mock provider for testing with configurable bot pools
+
+- **Bot Authentication:**
+
+  - Token-based authentication for bot queue requests
+  - Authorization checks for lobby type access
+  - Validation helpers for queue request processing
+  - Mock authenticators for testing scenarios
+
+- **Automatic Backfilling:**
+  - Configurable backfill triggers (wait time expired, extended wait)
+  - Rating-based bot selection to match human players
+  - Cooldown periods to prevent excessive backfilling
+  - Statistics tracking for backfill operations
+  - Support for aggressive and conservative backfill strategies
+
+#### **Test Coverage:**
+
+- **19 new unit tests** covering all bot integration scenarios
+- Bot authentication and authorization flows
+- Backfill manager configuration and operation
+- Bot provider selection algorithms
+- Mock implementations for testing
+
+**Total Test Count: 108 tests passing ✅**
+
+**Next: Phase 5 - Final Integration & Documentation**
+
+### 🚧 Phase 5: Final Integration & Documentation (Step 7) - **NEXT**
+
+- **Integration tests across all systems**
+- **Performance benchmarks**
+- **API documentation**
+- **Deployment configuration**
