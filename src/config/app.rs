@@ -12,6 +12,7 @@ use std::time::Duration;
 
 /// Main application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct AppConfig {
     pub service: ServiceSettings,
     pub amqp: AmqpSettings,
@@ -69,15 +70,6 @@ pub struct MatchmakingSettings {
     pub enable_bot_backfill: bool,
 }
 
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            service: ServiceSettings::default(),
-            amqp: AmqpSettings::default(),
-            matchmaking: MatchmakingSettings::default(),
-        }
-    }
-}
 
 impl Default for ServiceSettings {
     fn default() -> Self {

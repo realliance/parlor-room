@@ -3,7 +3,7 @@
 //! This module handles the logic for matching players to existing lobbies
 //! or determining when new lobbies should be created.
 
-use crate::error::{MatchmakingError, Result};
+use crate::error::Result;
 use crate::lobby::instance::{Lobby, LobbyState};
 use crate::types::{LobbyId, LobbyType, Player, PlayerType};
 use crate::utils::rating_difference;

@@ -202,13 +202,11 @@ impl LobbyProvider for StaticLobbyProvider {
         }
 
         // Validate General lobby specific rules
-        if config.lobby_type == LobbyType::General {
-            if config.min_human_players > config.capacity {
-                return Err(MatchmakingError::ConfigurationError {
-                    message: "Minimum human players cannot exceed lobby capacity".to_string(),
-                }
-                .into());
+        if config.lobby_type == LobbyType::General && config.min_human_players > config.capacity {
+            return Err(MatchmakingError::ConfigurationError {
+                message: "Minimum human players cannot exceed lobby capacity".to_string(),
             }
+            .into());
         }
 
         Ok(())

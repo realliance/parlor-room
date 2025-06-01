@@ -219,6 +219,12 @@ pub struct MockMessageHandler {
 }
 
 #[cfg(test)]
+impl Default for MockMessageHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockMessageHandler {
     pub fn new() -> Self {
         Self {
@@ -270,7 +276,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_handler() {
-        let mut handler = MockMessageHandler::new();
+        let handler = MockMessageHandler::new();
         let request = create_test_queue_request();
 
         // Test handling a request

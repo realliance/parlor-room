@@ -213,10 +213,8 @@ impl LobbyInstance {
     fn update_state(&mut self) {
         match self.state {
             LobbyState::WaitingForPlayers => {
-                if self.is_full() && self.meets_human_requirement() {
-                    if self.config.immediate_start_when_full {
-                        self.state = LobbyState::ReadyToStart;
-                    }
+                if self.is_full() && self.meets_human_requirement() && self.config.immediate_start_when_full {
+                    self.state = LobbyState::ReadyToStart;
                 }
             }
             LobbyState::ReadyToStart => {

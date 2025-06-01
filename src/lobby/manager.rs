@@ -7,7 +7,7 @@ use crate::amqp::publisher::EventPublisher;
 use crate::error::{MatchmakingError, Result};
 use crate::lobby::instance::{Lobby, LobbyInstance, LobbyState};
 use crate::lobby::matching::{BasicLobbyMatcher, LobbyMatcher, MatchingConfig, MatchingResult};
-use crate::lobby::provider::{LobbyConfiguration, LobbyProvider};
+use crate::lobby::provider::LobbyProvider;
 use crate::metrics::MetricsCollector;
 use crate::types::{GameStarting, LobbyId, LobbyType, Player, PlayerJoinedLobby, QueueRequest};
 use crate::utils::{current_timestamp, generate_lobby_id};
@@ -537,7 +537,7 @@ impl LobbyManager {
             self.metrics_collector
                 .lobby()
                 .lobbies_cleaned_total
-                .inc_by(cleaned_count as u64);
+                .inc_by(cleaned_count);
         }
 
         if cleaned_count > 0 {

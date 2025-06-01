@@ -243,7 +243,7 @@ impl RatingCalculator for WengLinRatingCalculator {
             }
 
             let new_weng_lin_rating = &new_ratings_result[i][0]; // First (and only) player in team
-            let new_rating: PlayerRating = new_weng_lin_rating.clone().into();
+            let new_rating: PlayerRating = (*new_weng_lin_rating).into();
             let rank = ranking_map[player_id];
 
             let change = RatingChange {

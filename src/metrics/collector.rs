@@ -7,12 +7,11 @@ use crate::lobby::manager::LobbyManagerStats;
 use crate::types::{LobbyType, PlayerType};
 use anyhow::Result;
 use prometheus::{
-    Counter, CounterVec, Gauge, GaugeVec, Histogram, HistogramOpts, HistogramVec, IntCounter,
+    Gauge, GaugeVec, Histogram, HistogramOpts, HistogramVec, IntCounter,
     IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
 };
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{debug, warn};
 
 /// Main metrics collector for the matchmaking service
 #[derive(Clone)]

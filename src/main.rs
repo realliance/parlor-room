@@ -13,7 +13,6 @@ use std::sync::Arc;
 use tokio::signal;
 use tokio::time::{sleep, Duration};
 use tracing::{error, info, warn};
-use tracing_subscriber;
 
 /// Parlor Room Matchmaking Service - Bot and Player MMR Queueing System
 #[derive(Parser)]

@@ -229,7 +229,7 @@ impl BotProvider for IntegrationBotProvider {
 
         Ok(tokens
             .get(bot_id)
-            .map_or(false, |token| token == auth_token))
+            .is_some_and(|token| token == auth_token))
     }
 
     async fn get_bot(&self, bot_id: &str) -> Result<Option<Player>> {

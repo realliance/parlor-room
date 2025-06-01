@@ -4,7 +4,6 @@
 //! service components, AMQP connections, and background tasks.
 
 use crate::amqp::connection::{AmqpConfig, AmqpConnection};
-use crate::amqp::handlers::MessageHandler;
 use crate::amqp::publisher::{AmqpEventPublisher, PublisherConfig};
 use crate::bot::auth::DefaultBotAuthenticator;
 use crate::bot::backfill::{BackfillConfig, DefaultBackfillManager};
@@ -18,7 +17,7 @@ use crate::metrics::{HealthServer, MetricsCollector, MetricsService};
 use crate::rating::{ExtendedWengLinConfig, InMemoryRatingStorage, WengLinRatingCalculator};
 use crate::wait_time::calculator::{DynamicWaitTimeCalculator, WaitTimeConfig};
 use crate::wait_time::provider::InternalWaitTimeProvider;
-use crate::wait_time::statistics::{InMemoryStatisticsTracker, StatsKey};
+use crate::wait_time::statistics::InMemoryStatisticsTracker;
 use anyhow::Result;
 use std::sync::Arc;
 use thiserror::Error;

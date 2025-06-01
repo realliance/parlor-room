@@ -267,7 +267,7 @@ impl WaitTimeCalculator for StaticWaitTimeCalculator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wait_time::statistics::{InMemoryStatisticsTracker, WaitTimeStats};
+    use crate::wait_time::statistics::InMemoryStatisticsTracker;
 
     #[test]
     fn test_wait_time_config_default() {

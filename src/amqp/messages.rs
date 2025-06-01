@@ -142,7 +142,7 @@ impl MessageUtils {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::*;
+    
 
     fn create_test_queue_request() -> QueueRequest {
         QueueRequest {
