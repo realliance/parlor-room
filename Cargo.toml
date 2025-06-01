@@ -1,14 +1,44 @@
 [package]
 name = "parlor-room"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+authors = ["Your Name <email@example.com>"]
+description = "A matchmaking microservice for Bot and Player MMR queueing"
 
 [dependencies]
-amqprs = "2"
+# AMQP
+amqprs = "2.1"
+
+# Async runtime
 tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Utilities
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Rating system
+skillratings = { version = "0.27", features = ["serde"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
 [dev-dependencies]
+# Testing
+tokio-test = "0.4"
+proptest = "1.4"
+criterion = { version = "0.5", features = ["html_reports"] }
 mockall = "0.13"
-tokio-test = "0.1"
+
+[[bench]]
+name = "rating_performance"
+harness = false
