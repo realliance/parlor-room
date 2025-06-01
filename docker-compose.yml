@@ -1,0 +1,75 @@
+services:
+  # RabbitMQ message broker
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: parlor_user
+      RABBITMQ_DEFAULT_PASS: parlor_pass
+      RABBITMQ_DEFAULT_VHOST: /parlor
+    ports:
+      - "5672:5672"      # AMQP port
+      - "15672:15672"    # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - parlor-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # Parlor Room Matchmaking Service
+  parlor-room:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # AMQP Configuration
+      AMQP_URL: "amqp://parlor_user:parlor_pass@rabbitmq:5672/%2Fparlor"
+      AMQP_EXCHANGE: "parlor.matchmaking"
+      AMQP_QUEUE_PREFIX: "parlor"
+      
+      # Service Configuration
+      HTTP_PORT: "8080"
+      METRICS_PORT: "9090"
+      
+      # Logging
+      RUST_LOG: "info,parlor_room=debug"
+      RUST_BACKTRACE: "1"
+      
+      # Lobby Configuration
+      GENERAL_LOBBY_CAPACITY: "4"
+      ALLBOT_LOBBY_CAPACITY: "4"
+      MIN_WAIT_TIME_SECONDS: "30"
+      MAX_WAIT_TIME_SECONDS: "300"
+      
+      # Rating System
+      RATING_BETA: "25.0"
+      RATING_KAPPA: "0.0001"
+      RATING_TAU: "0.0833"
+    ports:
+      - "8080:8080"      # Main HTTP server
+      - "9090:9090"      # Metrics endpoint
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - parlor-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/parlor-room", "--health-check"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  rabbitmq_data:
+    driver: local
+
+networks:
+  parlor-network:
+    driver: bridge 

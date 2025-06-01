@@ -1,0 +1,25 @@
+# Example configuration for Parlor Room Matchmaking Service
+
+[service]
+name = "parlor-room"
+log_level = "info"
+http_port = 8080
+metrics_port = 9090
+health_port = 8080
+shutdown_timeout_seconds = 30
+max_concurrent_operations = 1000
+
+[amqp]
+url = "amqp://parlor_user:parlor_pass@localhost:5672/%2Fparlor"
+queue_name = "matchmaking.queue_requests"
+exchange_name = "matchmaking.events"
+connection_timeout_seconds = 30
+max_retry_attempts = 5
+retry_delay_ms = 1000
+
+[matchmaking]
+max_wait_time_seconds = 300
+cleanup_interval_seconds = 60
+backfill_delay_seconds = 30
+max_rating_difference = 500.0
+enable_bot_backfill = true

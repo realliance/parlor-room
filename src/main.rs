@@ -5,13 +5,76 @@
 //! logging, and graceful shutdown.
 
 use anyhow::Result;
+use clap::Parser;
 use parlor_room::config::AppConfig;
-use parlor_room::service::{AppState, HealthCheck};
+use parlor_room::service::{AppState, HealthCheck, HealthStatus};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::signal;
 use tokio::time::{sleep, Duration};
 use tracing::{error, info, warn};
 use tracing_subscriber;
+
+/// Parlor Room Matchmaking Service - Bot and Player MMR Queueing System
+#[derive(Parser)]
+#[command(
+    name = "parlor-room",
+    version,
+    about = "A high-performance matchmaking microservice for bot and player MMR queueing",
+    long_about = "Parlor Room is a Rust-based matchmaking microservice that handles player and bot \
+                 queueing via AMQP, manages lobbies with different configurations, implements \
+                 dynamic wait times, and uses Weng-Lin (OpenSkill) rating system for skill-based matching."
+)]
+struct Args {
+    /// Configuration file path
+    #[arg(
+        short,
+        long,
+        value_name = "FILE",
+        help = "Path to configuration file (TOML format)"
+    )]
+    config: Option<PathBuf>,
+
+    /// Perform health check and exit
+    #[arg(long, help = "Perform a health check and exit with status code")]
+    health_check: bool,
+
+    /// Log level override
+    #[arg(
+        short,
+        long,
+        value_name = "LEVEL",
+        help = "Override log level (trace, debug, info, warn, error)"
+    )]
+    log_level: Option<String>,
+
+    /// AMQP URL override
+    #[arg(long, value_name = "URL", help = "Override AMQP connection URL")]
+    amqp_url: Option<String>,
+
+    /// HTTP port override
+    #[arg(long, value_name = "PORT", help = "Override HTTP server port")]
+    http_port: Option<u16>,
+
+    /// Metrics port override
+    #[arg(long, value_name = "PORT", help = "Override metrics server port")]
+    metrics_port: Option<u16>,
+
+    /// Disable bot backfill
+    #[arg(long, help = "Disable automatic bot backfill in general lobbies")]
+    no_bot_backfill: bool,
+
+    /// Enable debug mode
+    #[arg(short, long, help = "Enable debug mode with verbose logging")]
+    debug: bool,
+
+    /// Dry run mode (validate config and exit)
+    #[arg(
+        long,
+        help = "Validate configuration and exit without starting service"
+    )]
+    dry_run: bool,
+}
 
 /// Initialize structured logging with the configured level
 fn init_logging(log_level: &str) -> Result<()> {
@@ -29,6 +92,36 @@ fn init_logging(log_level: &str) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to initialize logging: {}", e))?;
 
     Ok(())
+}
+
+/// Perform health check and return appropriate exit code
+async fn perform_health_check(config: AppConfig) -> Result<()> {
+    info!("Performing health check...");
+
+    // Initialize minimal app state for health check
+    let app_state = AppState::new(config).await?;
+    let app_state = Arc::new(app_state);
+
+    match HealthCheck::check(app_state).await {
+        Ok(health) => {
+            println!("Health Check: {}", health.status);
+            println!("  Active Lobbies: {}", health.stats.active_lobbies);
+            println!("  Games Started: {}", health.stats.games_started);
+            println!("  Players Waiting: {}", health.stats.players_waiting);
+            println!("  Players Matched: {}", health.stats.players_matched);
+            println!("  Uptime: {}", health.stats.uptime_info);
+
+            if health.status == HealthStatus::Healthy {
+                std::process::exit(0);
+            } else {
+                std::process::exit(1);
+            }
+        }
+        Err(e) => {
+            error!("Health check failed: {}", e);
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Wait for shutdown signals (SIGINT, SIGTERM)
@@ -99,18 +192,71 @@ fn display_startup_banner(config: &AppConfig) {
     info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 }
 
+/// Load and merge configuration from environment and CLI arguments
+fn load_config(args: &Args) -> Result<AppConfig> {
+    // Start with environment-based config
+    let mut config = if let Some(config_path) = &args.config {
+        info!("Loading configuration from: {}", config_path.display());
+        AppConfig::from_file(config_path)?
+    } else {
+        AppConfig::from_env()?
+    };
+
+    // Apply CLI overrides
+    if let Some(log_level) = &args.log_level {
+        config.service.log_level = log_level.clone();
+    }
+
+    if args.debug {
+        config.service.log_level = "debug".to_string();
+    }
+
+    if let Some(amqp_url) = &args.amqp_url {
+        config.amqp.url = amqp_url.clone();
+    }
+
+    if let Some(http_port) = args.http_port {
+        config.service.http_port = http_port;
+    }
+
+    if let Some(metrics_port) = args.metrics_port {
+        config.service.metrics_port = metrics_port;
+    }
+
+    if args.no_bot_backfill {
+        config.matchmaking.enable_bot_backfill = false;
+    }
+
+    Ok(config)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Load configuration from environment
-    let config = AppConfig::from_env().unwrap_or_else(|e| {
+    // Parse command line arguments
+    let args = Args::parse();
+
+    // Load configuration (CLI args can override environment/config file)
+    let config = load_config(&args).unwrap_or_else(|e| {
         eprintln!("Configuration error: {}", e);
         std::process::exit(1);
     });
 
-    // Initialize logging
+    // Initialize logging early (before any other operations)
     if let Err(e) = init_logging(&config.service.log_level) {
         eprintln!("Failed to initialize logging: {}", e);
         std::process::exit(1);
+    }
+
+    // Handle special modes
+    if args.health_check {
+        return perform_health_check(config).await;
+    }
+
+    if args.dry_run {
+        info!("Configuration validation successful");
+        display_startup_banner(&config);
+        info!("Dry run completed - exiting without starting service");
+        return Ok(());
     }
 
     // Display startup information

@@ -1,0 +1,44 @@
+# Build artifacts and cache
+target/
+**/*.rs.bk
+
+# Git and version control
+.git/
+.gitignore
+
+# Documentation and plans
+*.md
+EXECUTION_PLAN.md
+
+# Development tools and configuration
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Nix-specific files (not needed in container)
+shell.nix
+flake.nix
+flake.lock
+default.nix
+
+# Test artifacts
+coverage/
+**/*.profraw
+
+# Logs and temporary files
+*.log
+tmp/
+temp/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Debug binaries
+debug
+debug.rs
+
+# Benchmark outputs
+criterion/ 

@@ -6,6 +6,8 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::fs;
+use std::path::Path;
 use std::time::Duration;
 
 /// Main application configuration
@@ -23,6 +25,10 @@ pub struct ServiceSettings {
     pub name: String,
     /// Log level (trace, debug, info, warn, error)
     pub log_level: String,
+    /// Port for HTTP server
+    pub http_port: u16,
+    /// Port for metrics endpoint
+    pub metrics_port: u16,
     /// Port for health check endpoint
     pub health_port: u16,
     /// Graceful shutdown timeout in seconds
@@ -78,6 +84,8 @@ impl Default for ServiceSettings {
         Self {
             name: "parlor-room".to_string(),
             log_level: "info".to_string(),
+            http_port: 8080,
+            metrics_port: 9090,
             health_port: 8080,
             shutdown_timeout_seconds: 30,
             max_concurrent_operations: 1000,
@@ -111,6 +119,23 @@ impl Default for MatchmakingSettings {
 }
 
 impl AppConfig {
+    /// Load configuration from a TOML file
+    pub fn from_file<P: AsRef<Path>>(config_path: P) -> Result<Self> {
+        let config_content = fs::read_to_string(config_path.as_ref()).map_err(|e| {
+            anyhow!(
+                "Failed to read config file {}: {}",
+                config_path.as_ref().display(),
+                e
+            )
+        })?;
+
+        let config: Self = toml::from_str(&config_content)
+            .map_err(|e| anyhow!("Failed to parse TOML config: {}", e))?;
+
+        validate_config(&config)?;
+        Ok(config)
+    }
+
     /// Load configuration from environment variables with fallback to defaults
     pub fn from_env() -> Result<Self> {
         let mut config = Self::default();
@@ -121,6 +146,16 @@ impl AppConfig {
         }
         if let Ok(log_level) = env::var("LOG_LEVEL") {
             config.service.log_level = log_level;
+        }
+        if let Ok(http_port) = env::var("HTTP_PORT") {
+            config.service.http_port = http_port
+                .parse()
+                .map_err(|_| anyhow!("Invalid HTTP_PORT value: {}", http_port))?;
+        }
+        if let Ok(metrics_port) = env::var("METRICS_PORT") {
+            config.service.metrics_port = metrics_port
+                .parse()
+                .map_err(|_| anyhow!("Invalid METRICS_PORT value: {}", metrics_port))?;
         }
         if let Ok(port) = env::var("HEALTH_PORT") {
             config.service.health_port = port
