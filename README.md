@@ -1,23 +1,29 @@
-# Parlor Room - Production Matchmaking Microservice
+# Parlor Room - Majong Matchmaking
+
+[![CI](https://github.com/realliance/parlor-room/workflows/CI/badge.svg)](https://github.com/realliance/parlor-room/actions/workflows/ci.yml)
+[![Docker](https://github.com/realliance/parlor-room/workflows/Docker%20Build%20and%20Publish/badge.svg)](https://github.com/realliance/parlor-room/actions/workflows/docker.yml)
+[![Release](https://github.com/realliance/parlor-room/workflows/Release/badge.svg)](https://github.com/realliance/parlor-room/actions/workflows/release.yml)
+[![Security Audit](https://github.com/realliance/parlor-room/workflows/CI/badge.svg?label=security)](https://github.com/realliance/parlor-room/actions/workflows/ci.yml)
+[![Docker Image](https://ghcr-badge.deta.dev/realliance/parlor-room/latest_tag?trim=major&label=docker)](https://github.com/realliance/parlor-room/pkgs/container/parlor-room)
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](#tests)
 [![Test Coverage](https://img.shields.io/badge/tests-114%2F114-brightgreen)](#tests)
 [![Performance](https://img.shields.io/badge/benchmarks-optimized-blue)](#benchmarks)
 
-A sophisticated, production-ready matchmaking microservice for mahjong games, built with Rust for high performance and reliability.
+A sophisticated, production-ready matchmaking for bot and human-bot mahjong games
 
 ## 🚀 Features
 
 ### Core Matchmaking
 
-- **Multi-lobby Support**: AllBot (immediate 4-bot games) and General (mixed human/bot) lobbies
+- **Multi-lobby Support**: All Bot (immediate 4-bot games) and General (mixed human/bot) lobbies
 - **Smart Player Matching**: Rating-based matching with configurable tolerance
 - **Dynamic Wait Time Calculation**: Statistical analysis of historical wait times
-- **Intelligent Bot Backfilling**: Automatic bot addition with rating compatibility
+- **Bot Backfilling**: Automatic bot addition with rating compatibility
 
 ### Production Architecture
 
-- **AMQP Message Queue Integration**: Scalable event-driven architecture
+- **Message Queue Integration**: Scalable event-driven architecture
 - **Comprehensive Health Monitoring**: Health checks, readiness probes, and statistics
 - **Advanced Rating System**: Weng-Lin rating algorithm via skillratings crate
 - **Real-time Event Publishing**: Game events to external systems
@@ -39,9 +45,32 @@ A sophisticated, production-ready matchmaking microservice for mahjong games, bu
 
 ### Installation
 
+#### Using Docker (Recommended)
+
+Pull and run the latest image from GitHub Container Registry:
+
+```bash
+# Pull the latest image
+docker pull ghcr.io/realliance/parlor-room:latest
+
+# Run with basic configuration
+docker run -d \
+  --name parlor-room \
+  -p 8080:8080 \
+  -p 9090:9090 \
+  -e AMQP_URL="amqp://guest:guest@rabbitmq:5672/%2f" \
+  ghcr.io/realliance/parlor-room:latest
+
+# Check health
+curl http://localhost:8080/health
+curl http://localhost:9090/metrics
+```
+
+#### Building from Source
+
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/parlor-room.git
+git clone https://github.com/realliance/parlor-room.git
 cd parlor-room
 
 # Build the project
@@ -52,6 +81,74 @@ cargo test
 
 # Run benchmarks
 cargo bench
+```
+
+### Docker Compose Example
+
+Create a `docker-compose.yml` file:
+
+```yaml
+version: "3.8"
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 30s
+      retries: 3
+
+  parlor-room:
+    image: ghcr.io/realliance/parlor-room:latest
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      AMQP_URL: "amqp://guest:guest@rabbitmq:5672/%2f"
+      LOG_LEVEL: "info"
+      HEALTH_PORT: "8080"
+      METRICS_PORT: "9090"
+    ports:
+      - "8080:8080" # Health endpoints
+      - "9090:9090" # Metrics endpoints
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+```
+
+Example `prometheus.yml`:
+
+```yaml
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: "parlor-room"
+    static_configs:
+      - targets: ["parlor-room:9090"]
+    scrape_interval: 15s
+    metrics_path: /metrics
 ```
 
 ### Configuration
@@ -127,6 +224,59 @@ cargo test --lib lobby::
 cargo bench
 ```
 
+## 🚀 CI/CD Pipeline
+
+This project includes comprehensive GitHub Actions workflows:
+
+### Continuous Integration
+
+The CI pipeline (`.github/workflows/ci.yml`) automatically:
+
+- **Code Quality**: Runs `cargo fmt`, `cargo clippy`, and compilation checks
+- **Testing**: Executes all unit and integration tests with RabbitMQ service
+- **Security**: Performs security audits with `cargo audit`
+- **Coverage**: Generates code coverage reports and uploads to Codecov
+- **Benchmarks**: Runs performance benchmarks
+- **Multi-platform Builds**: Builds for `x86_64-unknown-linux-gnu` and `x86_64-unknown-linux-musl`
+- **Docker Validation**: Validates Dockerfile builds successfully
+
+### Docker Image Publishing
+
+The Docker workflow (`.github/workflows/docker.yml`) automatically:
+
+- **Multi-platform Images**: Builds for `linux/amd64` and `linux/arm64`
+- **Registry Publishing**: Pushes to GitHub Container Registry (`ghcr.io`)
+- **Security Scanning**: Scans images with Trivy vulnerability scanner
+- **Image Testing**: Validates image functionality with smoke tests
+- **Tagging Strategy**:
+  - `main` branch → `ghcr.io/realliance/parlor-room:main`
+  - Tags → `ghcr.io/realliance/parlor-room:v1.0.0`
+  - PR branches → `ghcr.io/realliance/parlor-room:pr-123`
+
+### Release Automation
+
+The release workflow (`.github/workflows/release.yml`) automatically:
+
+- **Multi-platform Binaries**: Builds for Linux, macOS, and Windows
+- **Release Creation**: Auto-generates releases with changelogs
+- **Binary Publishing**: Uploads platform-specific binaries
+- **Checksums**: Generates and publishes SHA256 checksums
+- **Docker Latest**: Updates `latest` tag for stable releases
+- **Cargo Publishing**: Publishes to crates.io (optional)
+
+### Workflow Triggers
+
+- **CI**: Runs on all pushes and pull requests to `main`/`develop`
+- **Docker**: Builds images on pushes to `main`/`develop` and tags
+- **Release**: Triggers on version tags (`v*`)
+
+### Security Features
+
+- **Dependency Scanning**: Automated security audits
+- **Container Scanning**: Trivy vulnerability scanning for Docker images
+- **SARIF Upload**: Security findings uploaded to GitHub Security tab
+- **Minimal Permissions**: Workflows use minimal required permissions
+
 ## 🔧 API Reference
 
 ### Queue Request Format
@@ -193,76 +343,4 @@ The parlor-room service includes comprehensive metrics collection and monitoring
 - `parlor_room_uptime_seconds` - Service uptime in seconds
 - `parlor_room_health_status` - Overall health status (0=unhealthy, 1=degraded, 2=healthy)
 - `parlor_room_amqp_messages_total` - Total AMQP messages processed
-- `parlor_room_amqp_errors_total` - AMQP processing errors
-
-#### Lobby Metrics
-
-- `parlor_room_active_lobbies` - Number of active lobbies by type
-- `parlor_room_lobbies_created_total` - Total lobbies created by type
-- `parlor_room_lobbies_cleaned_total` - Total lobbies cleaned up
-- `parlor_room_games_started_total` - Total games started by lobby type
-- `parlor_room_lobby_utilization` - Lobby capacity utilization (0.0 to 1.0)
-
-#### Player Metrics
-
-- `parlor_room_players_queued_total` - Total players queued by type and lobby
-- `parlor_room_players_waiting` - Players currently waiting in queue
-- `parlor_room_players_matched_total` - Total players matched and started games
-- `parlor_room_queue_wait_time_seconds` - Player queue wait time distribution
-
-#### Bot Metrics
-
-- `parlor_room_active_bot_requests` - Active bot queue requests
-- `parlor_room_backfill_operations_total` - Bot backfill operations by status
-- `parlor_room_bot_utilization` - Bot utilization in lobbies by type
-- `parlor_room_bot_auth_failures_total` - Bot authentication failures
-
-#### Performance Metrics
-
-- `parlor_room_queue_processing_duration_seconds` - Queue request processing time
-- `parlor_room_rating_calculation_duration_seconds` - Rating calculation time
-- `parlor_room_lobby_operation_duration_seconds` - Lobby operation durations
-- `parlor_room_memory_usage_bytes` - Memory usage
-- `parlor_room_thread_pool_active` - Active threads
-
-### Configuration
-
-Metrics are enabled by default and can be configured via:
-
-```toml
-[service]
-metrics_port = 9090  # Port for metrics endpoints
-```
-
-Or via environment variables:
-
-```bash
-METRICS_PORT=9090
-```
-
-Or via command line:
-
-```bash
-parlor-room --metrics-port 9090
-```
-
-### Integration with Monitoring Systems
-
-The metrics endpoint (`/metrics`) provides Prometheus-compatible metrics that can be scraped by:
-
-- Prometheus
-- Grafana
-- DataDog
-- New Relic
-- Any monitoring system that supports Prometheus format
-
-Example Prometheus scrape configuration:
-
-```yaml
-scrape_configs:
-  - job_name: "parlor-room"
-    static_configs:
-      - targets: ["localhost:9090"]
-    scrape_interval: 15s
-    metrics_path: /metrics
-```
+- `
