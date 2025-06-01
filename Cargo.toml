@@ -32,12 +32,21 @@ skillratings = { version = "0.27", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# Metrics
+prometheus = { version = "0.13", features = ["process"] }
+
+# HTTP server for metrics and health endpoints
+axum = { version = "0.8", features = ["json"] }
+tower = "0.5"
+tokio-stream = "0.1"
+
 [dev-dependencies]
 # Testing
 tokio-test = "0.4"
 proptest = "1.4"
 criterion = { version = "0.5", features = ["html_reports"] }
 mockall = "0.13"
+futures = "0.3"
 
 [[bench]]
 name = "rating_performance"
