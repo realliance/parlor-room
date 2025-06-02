@@ -37,7 +37,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Metrics
-prometheus = { version = "0.13", features = ["process"] }
+prometheus = { version = "0.13", default-features = false, features = [
+    "process",
+] }
 
 # HTTP server for metrics and health endpoints
 axum = { version = "0.8", features = ["json"] }
