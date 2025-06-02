@@ -172,7 +172,7 @@ async fn test_allbot_lobby_workflow() {
 
 #[tokio::test]
 async fn test_mixed_lobby_with_humans_and_bots() {
-    let (lobby_manager, _bot_provider, event_publisher) = create_test_system().await;
+    let (lobby_manager, _bot_provider, _event_publisher) = create_test_system().await;
 
     // Step 1: Human joins
     let human_request = QueueRequest {

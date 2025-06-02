@@ -6,6 +6,15 @@
 use crate::types::{PlayerId, PlayerRating, RatingChange};
 use serde::{Deserialize, Serialize};
 
+/// Type alias for player rating data (player_id, rating)
+pub type PlayerRatingData = (PlayerId, PlayerRating);
+
+/// Type alias for player ranking data (player_id, rank)
+pub type PlayerRankingData = (PlayerId, u32);
+
+/// Type alias for calculation call data
+pub type CalculationCallData = (Vec<PlayerRatingData>, Vec<PlayerRankingData>);
+
 /// Result of a rating calculation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RatingCalculationResult {
@@ -27,8 +36,8 @@ pub trait RatingCalculator: Send + Sync {
     /// Result containing rating changes and match quality
     fn calculate_rating_changes(
         &self,
-        players: &[(PlayerId, PlayerRating)],
-        rankings: &[(PlayerId, u32)],
+        players: &[PlayerRatingData],
+        rankings: &[PlayerRankingData],
     ) -> crate::error::Result<RatingCalculationResult>;
 
     /// Get the initial rating for new players
@@ -66,8 +75,8 @@ impl Default for NoOpRatingCalculator {
 impl RatingCalculator for NoOpRatingCalculator {
     fn calculate_rating_changes(
         &self,
-        players: &[(PlayerId, PlayerRating)],
-        rankings: &[(PlayerId, u32)],
+        players: &[PlayerRatingData],
+        rankings: &[PlayerRankingData],
     ) -> crate::error::Result<RatingCalculationResult> {
         if players.is_empty() {
             return Err(crate::error::MatchmakingError::InvalidQueueRequest {
@@ -128,7 +137,7 @@ impl RatingCalculator for NoOpRatingCalculator {
 /// Mock rating calculator for testing
 #[derive(Debug, Default)]
 pub struct MockRatingCalculator {
-    calculation_calls: std::sync::Mutex<Vec<(Vec<(PlayerId, PlayerRating)>, Vec<(PlayerId, u32)>)>>,
+    calculation_calls: std::sync::Mutex<Vec<CalculationCallData>>,
     fixed_result: std::sync::RwLock<Option<RatingCalculationResult>>,
     initial_rating: PlayerRating,
 }
@@ -153,9 +162,7 @@ impl MockRatingCalculator {
     }
 
     /// Get all calculation calls made (for testing)
-    pub fn get_calculation_calls(
-        &self,
-    ) -> Vec<(Vec<(PlayerId, PlayerRating)>, Vec<(PlayerId, u32)>)> {
+    pub fn get_calculation_calls(&self) -> Vec<CalculationCallData> {
         self.calculation_calls
             .lock()
             .map(|calls| calls.clone())
@@ -173,8 +180,8 @@ impl MockRatingCalculator {
 impl RatingCalculator for MockRatingCalculator {
     fn calculate_rating_changes(
         &self,
-        players: &[(PlayerId, PlayerRating)],
-        rankings: &[(PlayerId, u32)],
+        players: &[PlayerRatingData],
+        rankings: &[PlayerRankingData],
     ) -> crate::error::Result<RatingCalculationResult> {
         // Record the call
         if let Ok(mut calls) = self.calculation_calls.lock() {

@@ -168,6 +168,11 @@ impl AppState {
         self.metrics_service.clone()
     }
 
+    /// Get AMQP connection for health checks
+    pub fn amqp_connection(&self) -> Arc<AmqpConnection> {
+        self.amqp_connection.clone()
+    }
+
     /// Initialize metrics service
     async fn initialize_metrics(config: &AppConfig) -> Result<Arc<MetricsService>, ServiceError> {
         info!(
@@ -305,7 +310,7 @@ impl AppState {
 
         // Initialize bot system
         let bot_provider = Arc::new(MockBotProvider::new());
-        let bot_authenticator = Arc::new(DefaultBotAuthenticator::new(bot_provider.clone()));
+        let _bot_authenticator = Arc::new(DefaultBotAuthenticator::new(bot_provider.clone()));
 
         // Initialize wait time tracking
         let wait_time_config = WaitTimeConfig::default();
@@ -330,7 +335,7 @@ impl AppState {
             max_bots_per_backfill: 3,
             backfill_cooldown_seconds: config.matchmaking.backfill_delay_seconds,
         };
-        let backfill_manager = Arc::new(
+        let _backfill_manager = Arc::new(
             DefaultBackfillManager::new(
                 backfill_config,
                 bot_provider.clone(),

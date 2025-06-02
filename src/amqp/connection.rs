@@ -38,7 +38,7 @@ impl Default for AmqpConfig {
 /// Wrapper around AMQP connection with additional metadata
 pub struct AmqpConnection {
     connection: Connection,
-    config: AmqpConfig,
+    _config: AmqpConfig,
 }
 
 impl AmqpConnection {
@@ -46,7 +46,10 @@ impl AmqpConnection {
     pub async fn new(config: AmqpConfig) -> Result<Self> {
         let connection = Self::connect_with_retry(&config).await?;
 
-        Ok(Self { connection, config })
+        Ok(Self {
+            connection,
+            _config: config,
+        })
     }
 
     /// Attempt to connect with exponential backoff retry
@@ -131,13 +134,16 @@ impl AmqpConnection {
 /// Simple connection pool for AMQP connections
 pub struct AmqpConnectionPool {
     config: AmqpConfig,
-    pool_size: usize,
+    _pool_size: usize,
 }
 
 impl AmqpConnectionPool {
     /// Create a new connection pool
     pub fn new(config: AmqpConfig, pool_size: usize) -> Self {
-        Self { config, pool_size }
+        Self {
+            config,
+            _pool_size: pool_size,
+        }
     }
 
     /// Get a connection from the pool (simplified implementation)
@@ -170,7 +176,7 @@ mod tests {
     fn test_connection_pool_creation() {
         let config = AmqpConfig::default();
         let pool = AmqpConnectionPool::new(config, 5);
-        assert_eq!(pool.pool_size, 5);
+        assert_eq!(pool._pool_size, 5);
     }
 
     // Note: Integration tests with actual AMQP broker would go in tests/ directory

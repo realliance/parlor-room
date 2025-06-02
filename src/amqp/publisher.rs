@@ -287,16 +287,6 @@ mod tests {
         }
     }
 
-    fn create_test_game_starting_event() -> GameStarting {
-        GameStarting {
-            lobby_id: utils::generate_lobby_id(),
-            game_id: utils::generate_game_id(),
-            players: vec![],
-            rating_changes_preview: vec![],
-            timestamp: chrono::Utc::now(),
-        }
-    }
-
     #[test]
     fn test_publisher_config_default() {
         let config = PublisherConfig::default();

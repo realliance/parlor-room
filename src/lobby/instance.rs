@@ -213,7 +213,10 @@ impl LobbyInstance {
     fn update_state(&mut self) {
         match self.state {
             LobbyState::WaitingForPlayers => {
-                if self.is_full() && self.meets_human_requirement() && self.config.immediate_start_when_full {
+                if self.is_full()
+                    && self.meets_human_requirement()
+                    && self.config.immediate_start_when_full
+                {
                     self.state = LobbyState::ReadyToStart;
                 }
             }
@@ -291,8 +294,6 @@ impl Lobby for LobbyInstance {
     }
 
     fn remove_player(&mut self, player_id: &str) -> Result<Option<Player>> {
-        let initial_len = self.player_queue.len();
-
         let mut removed_player = None;
         self.player_queue.retain(|entry| {
             if entry.player.id == player_id {

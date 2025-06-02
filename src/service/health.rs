@@ -76,7 +76,6 @@ pub struct ServiceStats {
 impl HealthCheck {
     /// Perform a comprehensive health check of the service
     pub async fn check(app_state: Arc<AppState>) -> Result<Self> {
-        let start_time = std::time::Instant::now();
         let mut checks = Vec::new();
         let mut overall_status = HealthStatus::Healthy;
 

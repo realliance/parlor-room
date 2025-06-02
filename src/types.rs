@@ -91,7 +91,6 @@ pub enum LeaveReason {
 }
 
 /// AMQP Message Types
-
 /// Request to join a lobby queue
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueRequest {

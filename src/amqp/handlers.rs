@@ -160,7 +160,7 @@ impl QueueConsumer {
 
 /// Dead letter queue handler for failed messages
 pub struct DeadLetterHandler {
-    channel: Channel,
+    _channel: Channel,
     retry_attempts: std::collections::HashMap<String, u32>,
     max_retries: u32,
 }
@@ -169,7 +169,7 @@ impl DeadLetterHandler {
     /// Create a new dead letter handler
     pub fn new(channel: Channel, max_retries: u32) -> Self {
         Self {
-            channel,
+            _channel: channel,
             retry_attempts: std::collections::HashMap::new(),
             max_retries,
         }
@@ -225,6 +225,7 @@ impl Default for MockMessageHandler {
     }
 }
 
+#[cfg(test)]
 impl MockMessageHandler {
     pub fn new() -> Self {
         Self {

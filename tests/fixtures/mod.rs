@@ -30,13 +30,6 @@ impl MockEventPublisher {
             .unwrap_or_default()
     }
 
-    /// Clear published events
-    pub fn clear_events(&self) {
-        if let Ok(mut events) = self.published_events.lock() {
-            events.clear();
-        }
-    }
-
     /// Count events of specific type
     pub fn count_events_of_type(&self, event_type: &str) -> usize {
         self.get_published_events()
@@ -140,11 +133,6 @@ impl IntegrationBotProvider {
         }
     }
 
-    /// Set backfill delay for testing (simulates network latency)
-    pub fn set_backfill_delay(&mut self, delay_ms: u64) {
-        self.backfill_delay_ms = delay_ms;
-    }
-
     /// Get number of available bots
     pub fn available_count(&self) -> usize {
         if let (Ok(bots), Ok(reserved)) = (self.bots.lock(), self.reserved_bots.lock()) {
@@ -227,9 +215,7 @@ impl BotProvider for IntegrationBotProvider {
             }
         })?;
 
-        Ok(tokens
-            .get(bot_id)
-            .is_some_and(|token| token == auth_token))
+        Ok(tokens.get(bot_id).is_some_and(|token| token == auth_token))
     }
 
     async fn get_bot(&self, bot_id: &str) -> Result<Option<Player>> {
@@ -293,93 +279,4 @@ impl BotProvider for IntegrationBotProvider {
 
         Ok(bots && !reserved)
     }
-}
-
-/// Create test players with specific characteristics
-pub fn create_test_players() -> Vec<Player> {
-    vec![
-        Player {
-            id: "human_beginner_1".to_string(),
-            player_type: PlayerType::Human,
-            rating: PlayerRating {
-                rating: 1200.0,
-                uncertainty: 300.0,
-            },
-            joined_at: current_timestamp(),
-        },
-        Player {
-            id: "human_average_1".to_string(),
-            player_type: PlayerType::Human,
-            rating: PlayerRating {
-                rating: 1500.0,
-                uncertainty: 200.0,
-            },
-            joined_at: current_timestamp(),
-        },
-        Player {
-            id: "human_skilled_1".to_string(),
-            player_type: PlayerType::Human,
-            rating: PlayerRating {
-                rating: 1800.0,
-                uncertainty: 150.0,
-            },
-            joined_at: current_timestamp(),
-        },
-        Player {
-            id: "human_expert_1".to_string(),
-            player_type: PlayerType::Human,
-            rating: PlayerRating {
-                rating: 2000.0,
-                uncertainty: 100.0,
-            },
-            joined_at: current_timestamp(),
-        },
-    ]
-}
-
-/// Create test queue requests
-pub fn create_test_queue_requests() -> Vec<parlor_room::types::QueueRequest> {
-    let players = create_test_players();
-
-    players
-        .into_iter()
-        .map(|player| {
-            parlor_room::types::QueueRequest {
-                player_id: player.id,
-                player_type: player.player_type,
-                lobby_type: parlor_room::types::LobbyType::General,
-                current_rating: player.rating,
-                timestamp: current_timestamp(),
-                auth_token: None, // Humans don't need auth tokens
-            }
-        })
-        .collect()
-}
-
-/// Create bot queue requests with authentication
-pub fn create_bot_queue_requests() -> Vec<parlor_room::types::QueueRequest> {
-    vec![
-        parlor_room::types::QueueRequest {
-            player_id: "skilled_bot_1".to_string(),
-            player_type: PlayerType::Bot,
-            lobby_type: parlor_room::types::LobbyType::AllBot,
-            current_rating: PlayerRating {
-                rating: 1800.0,
-                uncertainty: 120.0,
-            },
-            timestamp: current_timestamp(),
-            auth_token: Some("token_skilled_1".to_string()),
-        },
-        parlor_room::types::QueueRequest {
-            player_id: "average_bot_1".to_string(),
-            player_type: PlayerType::Bot,
-            lobby_type: parlor_room::types::LobbyType::General,
-            current_rating: PlayerRating {
-                rating: 1500.0,
-                uncertainty: 200.0,
-            },
-            timestamp: current_timestamp(),
-            auth_token: Some("token_average_1".to_string()),
-        },
-    ]
 }

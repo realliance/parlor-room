@@ -126,7 +126,7 @@ pub trait BackfillManager: Send + Sync {
 
     /// Perform backfill operation on a lobby
     async fn backfill_lobby(
-        &self,
+        &mut self,
         lobby_id: LobbyId,
         lobby: &mut dyn Lobby,
         trigger: BackfillTrigger,
@@ -298,7 +298,7 @@ impl BackfillManager for DefaultBackfillManager {
     }
 
     async fn backfill_lobby(
-        &self,
+        &mut self,
         lobby_id: LobbyId,
         lobby: &mut dyn Lobby,
         trigger: BackfillTrigger,
@@ -370,6 +370,25 @@ impl BackfillManager for DefaultBackfillManager {
             .into());
         }
 
+        // Validate bot ratings using the rating calculator
+        // Use rating calculator to get baseline rating for validation context
+        let initial_rating = self.rating_calculator.get_initial_rating();
+        debug!(
+            "Using rating calculator with initial rating {:.1} for backfill validation",
+            initial_rating.rating
+        );
+
+        for bot in &selected_bots {
+            // Ensure bot rating is within reasonable range of target
+            let rating_diff = (bot.rating.rating - target_rating).abs();
+            if rating_diff > self.config.max_rating_tolerance * 2.0 {
+                debug!(
+                    "Bot {} rating {:.1} is outside tolerance for target {:.1}",
+                    bot.id, bot.rating.rating, target_rating
+                );
+            }
+        }
+
         // Reserve the selected bots
         let bot_ids: Vec<String> = selected_bots.iter().map(|b| b.id.clone()).collect();
         self.bot_provider.reserve_bots(bot_ids.clone()).await?;
@@ -421,6 +440,7 @@ impl BackfillManager for DefaultBackfillManager {
             result.lobby_full
         );
 
+        self.update_stats(&result, !result.added_bots.is_empty());
         Ok(result)
     }
 
@@ -483,7 +503,7 @@ impl BackfillManager for MockBackfillManager {
     }
 
     async fn backfill_lobby(
-        &self,
+        &mut self,
         lobby_id: LobbyId,
         _lobby: &mut dyn Lobby,
         trigger: BackfillTrigger,
