@@ -108,6 +108,8 @@ jobs:
           case ${{ matrix.target }} in
             x86_64-unknown-linux-musl)
               sudo apt-get install -y musl-tools
+              # Verify MUSL target is properly installed
+              rustup target list --installed | grep musl || rustup target add x86_64-unknown-linux-musl
               ;;
             aarch64-unknown-linux-gnu)
               sudo apt-get install -y gcc-aarch64-linux-gnu
@@ -146,6 +148,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ${{ env.ASSET_PATH }}
+          asset_name: ${{ env.ASSET_NAME }}
           asset_content_type: application/octet-stream
 
   publish-checksums:
