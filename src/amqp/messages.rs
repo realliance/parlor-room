@@ -142,7 +142,6 @@ impl MessageUtils {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn create_test_queue_request() -> QueueRequest {
         QueueRequest {

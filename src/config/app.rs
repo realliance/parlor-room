@@ -11,8 +11,7 @@ use std::path::Path;
 use std::time::Duration;
 
 /// Main application configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     pub service: ServiceSettings,
     pub amqp: AmqpSettings,
@@ -69,7 +68,6 @@ pub struct MatchmakingSettings {
     /// Enable bot backfilling
     pub enable_bot_backfill: bool,
 }
-
 
 impl Default for ServiceSettings {
     fn default() -> Self {

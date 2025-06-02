@@ -297,9 +297,7 @@ impl BotProvider for MockBotProvider {
             }
         })?;
 
-        Ok(tokens
-            .get(bot_id)
-            .is_some_and(|token| token == auth_token))
+        Ok(tokens.get(bot_id).is_some_and(|token| token == auth_token))
     }
 
     async fn get_bot(&self, bot_id: &str) -> crate::error::Result<Option<Player>> {
