@@ -6,10 +6,6 @@
 [![Security Audit](https://github.com/realliance/parlor-room/workflows/CI/badge.svg?label=security)](https://github.com/realliance/parlor-room/actions/workflows/ci.yml)
 [![Docker Image](https://ghcr-badge.deta.dev/realliance/parlor-room/latest_tag?trim=major&label=docker)](https://github.com/realliance/parlor-room/pkgs/container/parlor-room)
 
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](#tests)
-[![Test Coverage](https://img.shields.io/badge/tests-114%2F114-brightgreen)](#tests)
-[![Performance](https://img.shields.io/badge/benchmarks-optimized-blue)](#benchmarks)
-
 A sophisticated, production-ready matchmaking for bot and human-bot mahjong games
 
 ## 🚀 Features
