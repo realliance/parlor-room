@@ -51,7 +51,7 @@ Pull and run the latest image from GitHub Container Registry:
 
 ```bash
 # Pull the latest image
-docker pull ghcr.io/realliance/parlor-room:latest
+docker pull ghcr.io/realliance/parlor-room:main
 
 # Run with basic configuration
 docker run -d \
@@ -59,7 +59,7 @@ docker run -d \
   -p 8080:8080 \
   -p 9090:9090 \
   -e AMQP_URL="amqp://guest:guest@rabbitmq:5672/%2f" \
-  ghcr.io/realliance/parlor-room:latest
+  ghcr.io/realliance/parlor-room:main
 
 # Check health
 curl http://localhost:8080/health
@@ -106,7 +106,7 @@ services:
       retries: 3
 
   parlor-room:
-    image: ghcr.io/realliance/parlor-room:latest
+    image: ghcr.io/realliance/parlor-room:main
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -249,9 +249,9 @@ The Docker workflow (`.github/workflows/docker.yml`) automatically:
 - **Security Scanning**: Scans images with Trivy vulnerability scanner
 - **Image Testing**: Validates image functionality with smoke tests
 - **Tagging Strategy**:
-  - `main` branch → `ghcr.io/realliance/parlor-room:main`
-  - Tags → `ghcr.io/realliance/parlor-room:v1.0.0`
-  - PR branches → `ghcr.io/realliance/parlor-room:pr-123`
+  - `main` branch → `ghcr.io/realliance/parlor-room:main
+  - Tags → `ghcr.io/realliance/parlor-room:main
+  - PR branches → `ghcr.io/realliance/parlor-room:main
 
 ### Release Automation
 
