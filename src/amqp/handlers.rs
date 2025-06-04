@@ -94,15 +94,31 @@ impl AsyncConsumer for QueueConsumer {
         _basic_properties: BasicProperties,
         _content: Vec<u8>,
     ) {
+        let delivery_tag = deliver.delivery_tag();
+        let routing_key = deliver.routing_key();
+        let message_size = _content.len();
+        
+        info!(
+            "AMQP message received - delivery_tag: {}, routing_key: '{}', size: {} bytes",
+            delivery_tag, routing_key, message_size
+        );
+        
+        let start_time = std::time::Instant::now();
+        
         match self.process_message(&_content).await {
             Ok(_) => {
-                debug!(
-                    "Successfully processed message with delivery tag: {}",
-                    deliver.delivery_tag()
+                let processing_time = start_time.elapsed();
+                info!(
+                    "Message processed successfully - delivery_tag: {}, processing_time: {:.2}ms",
+                    delivery_tag, processing_time.as_secs_f64() * 1000.0
                 );
             }
             Err(e) => {
-                error!("Failed to process message: {}", e);
+                let processing_time = start_time.elapsed();
+                error!(
+                    "Message processing failed - delivery_tag: {}, processing_time: {:.2}ms, error: {}",
+                    delivery_tag, processing_time.as_secs_f64() * 1000.0, e
+                );
                 self.handler
                     .handle_error(
                         MatchmakingError::InternalError {
@@ -119,39 +135,62 @@ impl AsyncConsumer for QueueConsumer {
 impl QueueConsumer {
     /// Process an incoming message
     async fn process_message(&self, content: &[u8]) -> Result<()> {
+        info!("Deserializing queue request message...");
+        
         // Try to deserialize as a queue request
         let request = MessageUtils::deserialize_queue_request(content)?;
 
-        debug!(
-            "Processing queue request from player: {}",
-            request.player_id
+        info!(
+            "Queue request parsed - player_id: '{}', player_type: {:?}, lobby_type: {:?}, rating: {:.1}±{:.1}",
+            request.player_id, 
+            request.player_type, 
+            request.lobby_type,
+            request.current_rating.rating,
+            request.current_rating.uncertainty
         );
 
         // Authenticate bot requests
         if request.player_type == PlayerType::Bot {
+            info!("Authenticating bot request for '{}'", request.player_id);
+            
             if let Some(auth_token) = &request.auth_token {
+                let auth_start = std::time::Instant::now();
                 let is_authenticated = self
                     .handler
                     .authenticate_bot(&request.player_id, auth_token)
                     .await?;
+                let auth_time = auth_start.elapsed();
 
                 if !is_authenticated {
+                    warn!(
+                        "Bot authentication failed - bot_id: '{}', auth_time: {:.2}ms",
+                        request.player_id, 
+                        auth_time.as_secs_f64() * 1000.0
+                    );
                     return Err(MatchmakingError::BotAuthenticationFailed {
                         bot_id: request.player_id.clone(),
                     }
                     .into());
                 }
 
-                info!("Bot {} authenticated successfully", request.player_id);
+                info!(
+                    "Bot authenticated successfully - bot_id: '{}', auth_time: {:.2}ms", 
+                    request.player_id, 
+                    auth_time.as_secs_f64() * 1000.0
+                );
             } else {
+                warn!("Bot request missing auth token - bot_id: '{}'", request.player_id);
                 return Err(MatchmakingError::InvalidQueueRequest {
                     reason: "Bot requests must include authentication token".to_string(),
                 }
                 .into());
             }
+        } else {
+            info!("Processing human player request for '{}'", request.player_id);
         }
 
         // Handle the validated request
+        info!("Forwarding queue request to lobby manager...");
         self.handler.handle_queue_request(request).await?;
 
         Ok(())

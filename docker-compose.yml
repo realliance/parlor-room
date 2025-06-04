@@ -27,8 +27,8 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      # AMQP Configuration
-      AMQP_URL: "amqp://parlor_user:parlor_pass@rabbitmq:5672/%2Fparlor"
+      # AMQP Configuration - use /parlor vhost (which is set as default)
+      AMQP_URL: "amqp://parlor_user:parlor_pass@rabbitmq:5672/parlor"
       AMQP_EXCHANGE: "parlor.matchmaking"
       AMQP_QUEUE_PREFIX: "parlor"
       

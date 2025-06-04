@@ -76,15 +76,11 @@ struct Args {
 }
 
 /// Initialize structured logging with the configured level
-fn init_logging(log_level: &str) -> Result<()> {
+fn init_logging() -> Result<()> {
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| log_level.into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
-        .with_target(false)
-        .with_thread_ids(true)
-        .with_line_number(true)
         .finish();
 
     tracing::subscriber::set_global_default(subscriber)
@@ -234,17 +230,17 @@ async fn main() -> Result<()> {
     // Parse command line arguments
     let args = Args::parse();
 
-    // Load configuration (CLI args can override environment/config file)
-    let config = load_config(&args).unwrap_or_else(|e| {
-        eprintln!("Configuration error: {}", e);
-        std::process::exit(1);
-    });
-
     // Initialize logging early (before any other operations)
-    if let Err(e) = init_logging(&config.service.log_level) {
+    if let Err(e) = init_logging() {
         eprintln!("Failed to initialize logging: {}", e);
         std::process::exit(1);
     }
+
+    // Load configuration (CLI args can override environment/config file)
+    let config = load_config(&args).unwrap_or_else(|e| {
+        error!("Configuration error: {}", e);
+        std::process::exit(1);
+    });
 
     // Handle special modes
     if args.health_check {

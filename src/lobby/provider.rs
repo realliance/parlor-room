@@ -1,7 +1,7 @@
-//! Lobby provider traits and implementations
+//! Lobby provider trait and implementations
 //!
-//! This module defines the interface for creating and configuring lobbies,
-//! along with the static implementation for Phase 2.
+//! This module defines the interface for providing lobby configurations
+//! along with the static implementation.
 
 use crate::error::{MatchmakingError, Result};
 use crate::types::{LobbyType, PlayerType};
@@ -84,7 +84,7 @@ pub trait LobbyProvider: Send + Sync {
     fn default_config_for_type(&self, lobby_type: LobbyType) -> LobbyConfiguration;
 }
 
-/// Static lobby provider implementation for Phase 2
+/// Static lobby provider implementation
 ///
 /// This provider manages two predefined lobby types:
 /// - AllBot: 4 bots, immediate start

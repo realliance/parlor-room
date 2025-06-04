@@ -4,27 +4,32 @@
 //! service components, AMQP connections, and background tasks.
 
 use crate::amqp::connection::{AmqpConfig, AmqpConnection};
+use crate::amqp::handlers::{MessageHandler, QueueRequestConsumer};
+use crate::amqp::messages::QUEUE_REQUEST_QUEUE;
 use crate::amqp::publisher::{AmqpEventPublisher, PublisherConfig};
-use crate::bot::auth::DefaultBotAuthenticator;
+use crate::bot::auth::{BotAuthenticator, DefaultBotAuthenticator};
 use crate::bot::backfill::{BackfillConfig, DefaultBackfillManager};
 use crate::bot::provider::MockBotProvider;
 use crate::config::AppConfig;
+use crate::error::{MatchmakingError, Result as MatchmakingResult};
 use crate::lobby::instance::Lobby;
 use crate::lobby::manager::LobbyManager;
 use crate::lobby::provider::StaticLobbyProvider;
 use crate::metrics::health::HealthServerConfig;
 use crate::metrics::{HealthServer, MetricsCollector, MetricsService};
 use crate::rating::{ExtendedWengLinConfig, InMemoryRatingStorage, WengLinRatingCalculator};
+use crate::types::QueueRequest;
 use crate::wait_time::calculator::{DynamicWaitTimeCalculator, WaitTimeConfig};
 use crate::wait_time::provider::InternalWaitTimeProvider;
 use crate::wait_time::statistics::InMemoryStatisticsTracker;
 use anyhow::Result;
+use async_trait::async_trait;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Service-level errors
 #[derive(Error, Debug)]
@@ -40,6 +45,118 @@ pub enum ServiceError {
 
     #[error("Background task error: {message}")]
     BackgroundTask { message: String },
+}
+
+/// Production message handler that integrates with LobbyManager
+struct ProductionMessageHandler {
+    lobby_manager: Arc<RwLock<LobbyManager>>,
+    bot_authenticator: Arc<DefaultBotAuthenticator>,
+}
+
+impl ProductionMessageHandler {
+    fn new(
+        lobby_manager: Arc<RwLock<LobbyManager>>,
+        bot_authenticator: Arc<DefaultBotAuthenticator>,
+    ) -> Self {
+        Self {
+            lobby_manager,
+            bot_authenticator,
+        }
+    }
+}
+
+#[async_trait]
+impl MessageHandler for ProductionMessageHandler {
+    async fn handle_queue_request(&self, request: QueueRequest) -> MatchmakingResult<()> {
+        let start_time = std::time::Instant::now();
+
+        info!(
+            "Processing queue request in production handler - player: '{}', type: {:?}, lobby: {:?}",
+            request.player_id, request.player_type, request.lobby_type
+        );
+
+        let lobby_manager = self.lobby_manager.read().await;
+
+        match lobby_manager.handle_queue_request(request.clone()).await {
+            Ok(lobby_id) => {
+                let processing_time = start_time.elapsed();
+                info!(
+                    "Queue request processed successfully - player: '{}', lobby: {}, time: {:.2}ms",
+                    request.player_id,
+                    lobby_id,
+                    processing_time.as_secs_f64() * 1000.0
+                );
+                Ok(())
+            }
+            Err(e) => {
+                let processing_time = start_time.elapsed();
+                error!(
+                    "Queue request failed - player: '{}', type: {:?}, lobby: {:?}, time: {:.2}ms, error: {}",
+                    request.player_id, request.player_type, request.lobby_type,
+                    processing_time.as_secs_f64() * 1000.0, e
+                );
+                Err(e)
+            }
+        }
+    }
+
+    async fn authenticate_bot(&self, player_id: &str, auth_token: &str) -> MatchmakingResult<bool> {
+        info!(
+            "Authenticating bot '{}' with production authenticator",
+            player_id
+        );
+
+        let start_time = std::time::Instant::now();
+        let result = self
+            .bot_authenticator
+            .authenticate_bot(player_id, auth_token)
+            .await;
+
+        let auth_time = start_time.elapsed();
+
+        match &result {
+            Ok(true) => info!(
+                "Bot authentication successful - bot: '{}', time: {:.2}ms",
+                player_id,
+                auth_time.as_secs_f64() * 1000.0
+            ),
+            Ok(false) => warn!(
+                "Bot authentication failed - bot: '{}', time: {:.2}ms (invalid credentials)",
+                player_id,
+                auth_time.as_secs_f64() * 1000.0
+            ),
+            Err(e) => error!(
+                "Bot authentication error - bot: '{}', time: {:.2}ms, error: {}",
+                player_id,
+                auth_time.as_secs_f64() * 1000.0,
+                e
+            ),
+        }
+
+        result
+    }
+
+    async fn handle_error(&self, error: MatchmakingError, message_data: &[u8]) {
+        error!(
+            "Production message handler error - type: '{}', message_size: {} bytes",
+            error,
+            message_data.len()
+        );
+
+        // Log first 100 bytes of message for debugging (safely)
+        if !message_data.is_empty() {
+            let preview_len = std::cmp::min(100, message_data.len());
+            let preview = String::from_utf8_lossy(&message_data[..preview_len]);
+            error!("Message preview: {:?}", preview);
+        }
+
+        // In a production system, we might want to:
+        // - Log to external monitoring system
+        // - Send to dead letter queue
+        // - Update error metrics
+        // For now, we'll just log comprehensively
+        error!("Error handling completed - consider implementing dead letter queue for persistent failures");
+    }
 }
 
 /// Main application state containing all service components
@@ -58,6 +175,9 @@ pub struct AppState {
 
     /// Background task handles
     background_tasks: Vec<JoinHandle<()>>,
+
+    /// AMQP consumer for queue requests
+    queue_consumer: Option<QueueRequestConsumer>,
 
     /// Service status
     is_running: Arc<RwLock<bool>>,
@@ -92,6 +212,7 @@ impl AppState {
             amqp_connection,
             metrics_service,
             background_tasks: Vec::new(),
+            queue_consumer: None,
             is_running: Arc::new(RwLock::new(false)),
         })
     }
@@ -123,12 +244,24 @@ impl AppState {
         // Mark as not running
         *self.is_running.write().await = false;
 
-        // Stop background tasks
+        // Stop AMQP message consumption
+        if let Some(consumer) = &self.queue_consumer {
+            if let Err(e) = consumer.stop_consuming().await {
+                warn!("Failed to stop AMQP consumer: {}", e);
+            } else {
+                info!("✅ AMQP message consumption stopped");
+            }
+        }
+
+        // Stop background tasks (including metrics service task)
         self.stop_background_tasks().await;
 
         // Stop metrics service
+        info!("Stopping metrics service...");
         if let Err(e) = self.metrics_service.stop().await {
             warn!("Failed to stop metrics service: {}", e);
+        } else {
+            info!("✅ Metrics service stopped");
         }
 
         // Get final statistics
@@ -199,20 +332,29 @@ impl AppState {
     }
 
     /// Start metrics service
-    async fn start_metrics_service(&self) -> Result<(), ServiceError> {
+    async fn start_metrics_service(&mut self) -> Result<(), ServiceError> {
         info!("Starting metrics and health endpoints");
 
-        self.metrics_service
-            .start()
-            .await
-            .map_err(|e| ServiceError::Initialization {
-                message: format!("Failed to start metrics service: {}", e),
-            })?;
+        // Clone necessary references for the background task
+        let metrics_service = self.metrics_service.clone();
+        let port = self.config.service.metrics_port;
 
-        info!(
-            "✅ Metrics service started on port {}",
-            self.config.service.metrics_port
-        );
+        // Spawn the metrics service as a background task
+        let metrics_handle = tokio::spawn(async move {
+            if let Err(e) = metrics_service.start().await {
+                error!("Metrics service failed: {}", e);
+            } else {
+                info!("Metrics service task completed");
+            }
+        });
+
+        // Add the handle to background tasks for proper shutdown
+        self.background_tasks.push(metrics_handle);
+
+        // Give the server a moment to start up
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        info!("✅ Metrics service started on port {}", port);
         Ok(())
     }
 
@@ -376,20 +518,84 @@ impl AppState {
 
     /// Start AMQP message consumption
     async fn start_amqp_consumption(&mut self) -> Result<(), ServiceError> {
-        info!("Starting AMQP message consumption");
+        info!("Starting AMQP message consumption system...");
 
-        // For now, just log that we would start consumption
-        // In a real implementation, we'd create a MessageHandler and start consuming
-        info!("AMQP message consumption would be started here");
+        // Get a channel for consuming messages
+        info!("Opening AMQP channel for message consumption...");
+        let channel = self
+            .amqp_connection
+            .connection()
+            .open_channel(None)
+            .await
+            .map_err(|e| ServiceError::AmqpConnection {
+                message: format!("Failed to open consumer channel: {}", e),
+            })?;
 
+        info!("AMQP channel opened successfully");
+
+        // Declare the queue to ensure it exists
+        info!("Declaring queue: '{}'...", QUEUE_REQUEST_QUEUE);
+        let queue_declare_args = amqprs::channel::QueueDeclareArguments::new(QUEUE_REQUEST_QUEUE)
+            .durable(true)
+            .auto_delete(false)
+            .finish();
+
+        channel
+            .queue_declare(queue_declare_args)
+            .await
+            .map_err(|e| ServiceError::AmqpConnection {
+                message: format!("Failed to declare queue {}: {}", QUEUE_REQUEST_QUEUE, e),
+            })?;
+
+        info!("Queue '{}' declared successfully", QUEUE_REQUEST_QUEUE);
+
+        // Initialize bot authenticator
+        info!("Initializing bot authentication system...");
+        let bot_provider = Arc::new(MockBotProvider::new());
+        let bot_authenticator = Arc::new(DefaultBotAuthenticator::new(bot_provider));
+        info!("Bot authenticator initialized");
+
+        // Create message handler
+        info!("Creating production message handler...");
+        let message_handler = Arc::new(ProductionMessageHandler::new(
+            self.lobby_manager.clone(),
+            bot_authenticator,
+        ));
+        info!("Production message handler created");
+
+        // Create and configure consumer
+        info!("Setting up AMQP consumer...");
+        let consumer = QueueRequestConsumer::new(message_handler, channel);
+
+        // Start consuming from the queue
+        info!(
+            "Starting message consumption from queue '{}'...",
+            QUEUE_REQUEST_QUEUE
+        );
+        consumer
+            .start_consuming(QUEUE_REQUEST_QUEUE)
+            .await
+            .map_err(|e| ServiceError::AmqpConnection {
+                message: format!("Failed to start consuming messages: {}", e),
+            })?;
+
+        // Store consumer for cleanup
+        self.queue_consumer = Some(consumer);
+
+        info!(
+            "AMQP message consumption started successfully on queue: '{}'",
+            QUEUE_REQUEST_QUEUE
+        );
+        info!("Now listening for queue requests from players and bots...");
         Ok(())
     }
 
     /// Start background maintenance tasks
     async fn start_background_tasks(&mut self) -> Result<(), ServiceError> {
-        info!("Starting background maintenance tasks");
+        info!("Starting background maintenance tasks...");
 
         // Metrics update task
+        info!("Starting lobby metrics update task (30s interval)...");
         let metrics_task = {
             let lobby_manager = self.lobby_manager.clone();
             let metrics_collector = self.metrics_service.collector();
@@ -397,6 +603,7 @@ impl AppState {
 
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(30));
+                info!("Metrics update task started");
 
                 while *is_running.read().await {
                     interval.tick().await;
@@ -405,6 +612,10 @@ impl AppState {
                     let manager = lobby_manager.read().await;
                     match manager.get_stats().await {
                         Ok(stats) => {
+                            debug!(
+                                "Updating metrics - lobbies: {}, players: {}, games: {}",
+                                stats.active_lobbies, stats.players_waiting, stats.games_started
+                            );
                             metrics_collector.update_from_lobby_stats(&stats);
                         }
                         Err(e) => {
@@ -418,6 +629,10 @@ impl AppState {
         };
 
         // Lobby cleanup task
+        info!(
+            "Starting lobby cleanup task ({}s interval)...",
+            self.config.cleanup_interval().as_secs()
+        );
         let cleanup_task = {
             let lobby_manager = self.lobby_manager.clone();
             let cleanup_interval = self.config.cleanup_interval();
@@ -425,6 +640,7 @@ impl AppState {
 
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(cleanup_interval);
+                info!("Lobby cleanup task started");
 
                 while *is_running.read().await {
                     interval.tick().await;
@@ -434,6 +650,8 @@ impl AppState {
                         Ok(cleaned) => {
                             if cleaned > 0 {
                                 info!("Cleaned up {} stale lobbies", cleaned);
+                            } else {
+                                debug!("Cleanup check completed - no stale lobbies found");
                             }
                         }
                         Err(e) => {
@@ -448,12 +666,17 @@ impl AppState {
 
         // Bot backfill task (if enabled)
         let backfill_task = if self.config.matchmaking.enable_bot_backfill {
+            info!(
+                "Starting bot backfill task ({}s interval)...",
+                self.config.backfill_delay().as_secs()
+            );
             let lobby_manager = self.lobby_manager.clone();
             let backfill_interval = self.config.backfill_delay();
             let is_running = self.is_running.clone();
 
             Some(tokio::spawn(async move {
                 let mut interval = tokio::time::interval(backfill_interval);
+                info!("Bot backfill task started");
 
                 while *is_running.read().await {
                     interval.tick().await;
@@ -462,8 +685,13 @@ impl AppState {
                     let manager = lobby_manager.read().await;
                     match manager.get_lobbies_needing_backfill().await {
                         Ok(lobbies) => {
-                            for lobby in lobbies {
-                                info!("Processing backfill for lobby {}", lobby.lobby_id());
+                            if !lobbies.is_empty() {
+                                info!("Processing backfill for {} lobbies", lobbies.len());
+                                for lobby in lobbies {
+                                    info!("  - Backfill needed for lobby {}", lobby.lobby_id());
+                                }
+                            } else {
+                                debug!("Backfill check completed - no lobbies need backfill");
                             }
                         }
                         Err(e) => {
@@ -475,10 +703,12 @@ impl AppState {
                 info!("Bot backfill task stopped");
             }))
         } else {
+            info!("Bot backfill disabled - skipping backfill task");
             None
         };
 
         // Service health metrics task
+        info!("Starting health metrics task (60s interval)...");
         let health_metrics_task = {
             let metrics_collector = self.metrics_service.collector();
             let is_running = self.is_running.clone();
@@ -486,6 +716,7 @@ impl AppState {
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(60));
                 let start_time = tokio::time::Instant::now();
+                info!("Health metrics task started");
 
                 while *is_running.read().await {
                     interval.tick().await;
@@ -496,6 +727,11 @@ impl AppState {
                         .service()
                         .uptime_seconds
                         .set(uptime_seconds);
+
+                    debug!(
+                        "Updated service health metrics - uptime: {}s",
+                        uptime_seconds
+                    );
 
                     // Update health status (assume healthy for now)
                     metrics_collector.update_health_status(2); // 2 = healthy
@@ -511,26 +747,42 @@ impl AppState {
         };
 
         // Add tasks to background handles
+        let mut task_count = 3; // metrics, cleanup, health
         self.background_tasks.push(metrics_task);
         self.background_tasks.push(cleanup_task);
         self.background_tasks.push(health_metrics_task);
         if let Some(task) = backfill_task {
             self.background_tasks.push(task);
+            task_count += 1;
         }
 
+        info!(
+            "{} background maintenance tasks started successfully",
+            task_count
+        );
         Ok(())
     }
 
     /// Stop all background tasks
     async fn stop_background_tasks(&mut self) {
-        info!("Stopping {} background tasks", self.background_tasks.len());
+        let task_count = self.background_tasks.len();
+        if task_count == 0 {
+            info!("No background tasks to stop");
+            return;
+        }
+
+        info!("Stopping {} background tasks...", task_count);
 
         // Cancel all background tasks
-        for task in self.background_tasks.drain(..) {
+        for (i, task) in self.background_tasks.drain(..).enumerate() {
+            debug!("Aborting background task {}/{}", i + 1, task_count);
             task.abort();
         }
 
-        // Give tasks time to clean up
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Give tasks time to clean up gracefully
+        info!("Waiting for background tasks to complete shutdown...");
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        info!("✅ All {} background tasks stopped", task_count);
     }
 }

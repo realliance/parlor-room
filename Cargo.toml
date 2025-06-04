@@ -5,6 +5,10 @@ edition = "2021"
 authors = ["Your Name <email@example.com>"]
 description = "A matchmaking microservice for Bot and Player MMR queueing"
 
+[[bin]]
+name = "queue-tester"
+path = "src/bin/queue-tester.rs"
+
 [dependencies]
 # AMQP
 amqprs = "2.1"

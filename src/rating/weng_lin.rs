@@ -89,6 +89,7 @@ impl ExtendedWengLinConfig {
 }
 
 /// Weng-Lin rating calculator implementation
+#[derive(Debug)]
 pub struct WengLinRatingCalculator {
     config: ExtendedWengLinConfig,
 }
@@ -254,16 +255,6 @@ impl RatingCalculator for WengLinRatingCalculator {
             };
 
             rating_changes.push(change);
-
-            debug!(
-                "Rating change for {}: {:.1} (±{:.1}) -> {:.1} (±{:.1}), rank: {}",
-                player_id,
-                old_rating.rating,
-                old_rating.uncertainty,
-                new_rating.rating,
-                new_rating.uncertainty,
-                rank
-            );
         }
 
         Ok(RatingCalculationResult {

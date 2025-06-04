@@ -209,7 +209,7 @@ impl MetricsCollector {
 
         self.player_metrics
             .players_queued_total
-            .with_label_values(&["total"])
+            .with_label_values(&["total", "total"])
             .inc_by(stats.players_queued);
 
         // Update current state

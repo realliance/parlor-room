@@ -19,7 +19,8 @@ use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tracing::{debug, error, info};
+use tokio::sync::broadcast;
+use tracing::{debug, error, info, warn};
 
 /// Health server configuration
 #[derive(Debug, Clone)]
@@ -50,17 +51,23 @@ pub struct HealthServerState {
 pub struct HealthServer {
     config: HealthServerConfig,
     state: HealthServerState,
+    shutdown_tx: broadcast::Sender<()>,
+    shutdown_rx: broadcast::Receiver<()>,
 }
 
 impl HealthServer {
     /// Create a new health server
     pub fn new(config: HealthServerConfig, metrics_collector: Arc<MetricsCollector>) -> Self {
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+
         Self {
             config,
             state: HealthServerState {
                 metrics_collector,
                 app_state: None,
             },
+            shutdown_tx,
+            shutdown_rx,
         }
     }
 
@@ -81,8 +88,18 @@ impl HealthServer {
 
         info!("Health server listening on http://{}", addr);
 
-        axum::serve(listener, app).await?;
+        // Create a shutdown receiver for this task
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
 
+        // Serve with graceful shutdown
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = shutdown_rx.recv().await;
+                info!("Health server shutdown signal received");
+            })
+            .await?;
+
+        info!("Health server stopped");
         Ok(())
     }
 
@@ -98,10 +115,15 @@ impl HealthServer {
             .with_state(self.state.clone())
     }
 
-    /// Stop the health server (placeholder for graceful shutdown)
+    /// Stop the health server
     pub async fn stop(&self) -> Result<()> {
-        // Note: In a real implementation, you'd want to use a shutdown signal
-        // or graceful shutdown mechanism. For now, this is a placeholder.
+        info!("Stopping health server...");
+
+        if let Err(e) = self.shutdown_tx.send(()) {
+            warn!("Failed to send shutdown signal to health server: {}", e);
+        }
+
+        info!("Health server stop signal sent");
         Ok(())
     }
 }

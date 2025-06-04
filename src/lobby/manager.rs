@@ -9,7 +9,12 @@ use crate::lobby::instance::{Lobby, LobbyInstance, LobbyState};
 use crate::lobby::matching::{BasicLobbyMatcher, LobbyMatcher, MatchingConfig, MatchingResult};
 use crate::lobby::provider::LobbyProvider;
 use crate::metrics::MetricsCollector;
-use crate::types::{GameStarting, LobbyId, LobbyType, Player, PlayerJoinedLobby, QueueRequest};
+use crate::rating::calculator::RatingCalculator;
+use crate::rating::weng_lin::{ExtendedWengLinConfig, WengLinRatingCalculator};
+use crate::types::{
+    GameStarting, LobbyId, LobbyType, Player, PlayerJoinedLobby, QueueRequest,
+    RatingScenario, RatingScenariosTable, PlayerRatingRange,
+};
 use crate::utils::{current_timestamp, generate_lobby_id};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -33,7 +38,8 @@ pub struct LobbyManagerStats {
     pub players_waiting: usize,
 }
 
-/// Main lobby manager responsible for coordinating lobby operations
+/// The main lobby manager
+#[derive(Clone)]
 pub struct LobbyManager {
     /// Map of active lobbies by ID
     lobbies: Arc<RwLock<HashMap<LobbyId, LobbyInstance>>>,
@@ -49,6 +55,8 @@ pub struct LobbyManager {
     stats: Arc<RwLock<LobbyManagerStats>>,
     /// Metrics collector for recording performance data
     metrics_collector: Arc<MetricsCollector>,
+    /// Rating calculator for rating calculations
+    rating_calculator: Arc<dyn RatingCalculator>,
 }
 
 impl LobbyManager {
@@ -80,6 +88,10 @@ impl LobbyManager {
             event_publisher,
             stats: Arc::new(RwLock::new(LobbyManagerStats::default())),
             metrics_collector,
+            rating_calculator: Arc::new(
+                WengLinRatingCalculator::new(ExtendedWengLinConfig::default())
+                    .expect("Failed to create rating calculator")
+            ),
         }
     }
 
@@ -121,6 +133,10 @@ impl LobbyManager {
             event_publisher,
             stats: Arc::new(RwLock::new(LobbyManagerStats::default())),
             metrics_collector,
+            rating_calculator: Arc::new(
+                WengLinRatingCalculator::new(ExtendedWengLinConfig::default())
+                    .expect("Failed to create rating calculator")
+            ),
         }
     }
 
@@ -128,9 +144,10 @@ impl LobbyManager {
     pub async fn handle_queue_request(&self, request: QueueRequest) -> Result<LobbyId> {
         let start_time = Instant::now();
 
-        debug!(
-            "Handling queue request for player {} (type: {:?}, lobby: {:?})",
-            request.player_id, request.player_type, request.lobby_type
+        info!(
+            "Processing queue request - player_id: '{}', player_type: {:?}, lobby_type: {:?}, rating: {:.1}±{:.1}",
+            request.player_id, request.player_type, request.lobby_type,
+            request.current_rating.rating, request.current_rating.uncertainty
         );
 
         // Record queue request metric using the high-level API
@@ -157,26 +174,51 @@ impl LobbyManager {
                     message: "Failed to acquire stats lock".to_string(),
                 })?;
             stats.players_queued += 1;
+
+            info!(
+                "Updated queue stats - total_players_queued: {}, active_lobbies: {}",
+                stats.players_queued, stats.active_lobbies
+            );
         }
 
         let result = async {
             // Find or create suitable lobby
+            info!(
+                "Starting lobby search - player: '{}', type: {:?}, rating: {:.1}±{:.1}",
+                player.id, request.lobby_type, player.rating.rating, player.rating.uncertainty
+            );
             let lobby_id = self
                 .find_or_create_lobby_for_player(player.clone(), request.lobby_type)
                 .await?;
 
             // Add player to the lobby
+            info!("Adding player '{}' to lobby {}...", player.id, lobby_id);
             self.add_player_to_lobby(lobby_id, player).await?;
 
             // Check if lobby should start a game
+            info!(
+                "Checking if lobby {} is ready to start game...",
+                lobby_id
+            );
             self.check_and_start_game(lobby_id).await?;
 
+            info!(
+                "Queue request completed for player '{}' in lobby {}",
+                request.player_id, lobby_id
+            );
             Ok(lobby_id)
         }
         .await;
 
         // Record processing time using the high-level API
         let duration = start_time.elapsed();
+        info!(
+            "Queue processing completed - player_id: '{}', duration: {:.2}ms, result: {}",
+            request.player_id,
+            duration.as_secs_f64() * 1000.0,
+            if result.is_ok() { "SUCCESS" } else { "FAILED" }
+        );
+
         self.metrics_collector.record_queue_request(
             request.player_type,
             request.lobby_type,
@@ -192,8 +234,19 @@ impl LobbyManager {
         player: Player,
         lobby_type: LobbyType,
     ) -> Result<LobbyId> {
+        info!(
+            "Starting lobby search - player: '{}', type: {:?}, rating: {:.1}±{:.1}",
+            player.id, lobby_type, player.rating.rating, player.rating.uncertainty
+        );
+
         // Get all available lobbies of the requested type
         let available_lobbies = self.get_available_lobbies_for_type(lobby_type).await?;
+
+        info!(
+            "Found {} available lobbies of type {:?}",
+            available_lobbies.len(),
+            lobby_type
+        );
 
         // Convert to trait objects for matching
         let lobby_refs: Vec<&dyn Lobby> = available_lobbies
@@ -210,18 +263,24 @@ impl LobbyManager {
 
         match matching_result {
             MatchingResult::MatchedToLobby(lobby_id) => {
-                debug!("Found existing lobby {} for player {}", lobby_id, player.id);
+                info!(
+                    "Matched player '{}' to existing lobby {} (type: {:?})",
+                    player.id, lobby_id, lobby_type
+                );
                 Ok(lobby_id)
             }
             MatchingResult::CreateNewLobby => {
-                debug!("Creating new lobby for player {}", player.id);
+                info!(
+                    "No suitable lobby found for player '{}', creating new {:?} lobby",
+                    player.id, lobby_type
+                );
                 self.create_new_lobby(lobby_type).await
             }
             MatchingResult::ShouldWait { reason } => {
-                // For Phase 2, we'll create a new lobby instead of waiting
+                // Create a new lobby instead of waiting for better matches
                 warn!(
-                    "Player {} should wait ({}), but creating new lobby instead",
-                    player.id, reason
+                    "Player '{}' should wait ({}), but creating new {:?} lobby instead",
+                    player.id, reason, lobby_type
                 );
                 self.create_new_lobby(lobby_type).await
             }
@@ -258,9 +317,16 @@ impl LobbyManager {
 
     /// Create a new lobby of the specified type
     async fn create_new_lobby(&self, lobby_type: LobbyType) -> Result<LobbyId> {
+        info!("Creating new lobby of type {:?}...", lobby_type);
+
         let config = self.lobby_provider.get_lobby_config(lobby_type)?;
-        let lobby = LobbyInstance::new(config);
+        let lobby = LobbyInstance::new(config.clone());
         let lobby_id = lobby.lobby_id();
+
+        info!(
+            "Generated lobby - id: {}, type: {:?}, capacity: {}, base_wait: {}s",
+            lobby_id, config.lobby_type, config.capacity, config.base_wait_time_seconds
+        );
 
         // Add to manager
         {
@@ -283,6 +349,11 @@ impl LobbyManager {
                 })?;
             stats.lobbies_created += 1;
             stats.active_lobbies += 1;
+
+            info!(
+                "Lobby stats updated - total_created: {}, active: {}",
+                stats.lobbies_created, stats.active_lobbies
+            );
         }
 
         // Record lobby creation using the high-level API
@@ -294,33 +365,66 @@ impl LobbyManager {
 
     /// Add a player to a specific lobby
     async fn add_player_to_lobby(&self, lobby_id: LobbyId, player: Player) -> Result<()> {
-        let player_joined_event = {
-            let mut lobbies =
-                self.lobbies
-                    .write()
-                    .map_err(|_| MatchmakingError::InternalError {
-                        message: "Failed to acquire lobbies lock".to_string(),
-                    })?;
+        info!(
+            "Adding player '{}' ({:?}) to lobby {} - rating: {:.1}±{:.1}",
+            player.id,
+            player.player_type,
+            lobby_id,
+            player.rating.rating,
+            player.rating.uncertainty
+        );
 
-            let lobby =
-                lobbies
-                    .get_mut(&lobby_id)
-                    .ok_or_else(|| MatchmakingError::LobbyNotFound {
-                        lobby_id: lobby_id.to_string(),
-                    })?;
+        let player_joined_event =
+            {
+                let mut lobbies =
+                    self.lobbies
+                        .write()
+                        .map_err(|_| MatchmakingError::InternalError {
+                            message: "Failed to acquire lobbies lock".to_string(),
+                        })?;
 
-            // Add player to lobby
-            lobby.add_player(player.clone())?;
+                let lobby =
+                    lobbies
+                        .get_mut(&lobby_id)
+                        .ok_or_else(|| MatchmakingError::LobbyNotFound {
+                            lobby_id: lobby_id.to_string(),
+                        })?;
 
-            // Create event
-            PlayerJoinedLobby {
-                lobby_id,
-                player_id: player.id.clone(),
-                player_type: player.player_type,
-                current_players: lobby.get_players(),
-                timestamp: current_timestamp(),
-            }
-        };
+                // Log lobby state before adding player
+                info!(
+                    "Lobby {} state - current_players: {}/{}, type: {:?}, state: {:?}",
+                    lobby_id,
+                    lobby.get_players().len(),
+                    lobby.config().capacity,
+                    lobby.config().lobby_type,
+                    lobby.state()
+                );
+
+                // Add player to lobby
+                lobby.add_player(player.clone())?;
+
+                let current_players = lobby.get_players();
+                let human_count = current_players
+                    .iter()
+                    .filter(|p| p.player_type == crate::types::PlayerType::Human)
+                    .count();
+                let bot_count = current_players.len() - human_count;
+
+                info!(
+                "Player added to lobby {} - new_size: {}/{}, humans: {}, bots: {}, state: {:?}",
+                lobby_id, current_players.len(), lobby.config().capacity,
+                human_count, bot_count, lobby.state()
+            );
+
+                // Create event
+                PlayerJoinedLobby {
+                    lobby_id,
+                    player_id: player.id.clone(),
+                    player_type: player.player_type,
+                    current_players,
+                    timestamp: current_timestamp(),
+                }
+            };
 
         // Update player-related metrics using direct access
         match player.player_type {
@@ -341,12 +445,115 @@ impl LobbyManager {
             .publish_player_joined_lobby(player_joined_event)
             .await?;
 
-        debug!("Player {} joined lobby {}", player.id, lobby_id);
+        info!(
+            "PlayerJoinedLobby event published for player '{}' in lobby {}",
+            player.id, lobby_id
+        );
         Ok(())
+    }
+
+    /// Calculate all possible rating scenarios for players in a game
+    fn calculate_rating_scenarios(&self, players: &[Player]) -> RatingScenariosTable {
+        let num_players = players.len();
+        let mut scenarios = Vec::new();
+        let mut player_ranges = Vec::new();
+
+        let player_ratings: Vec<_> = players.iter()
+            .map(|p| (p.id.clone(), p.rating.clone()))
+            .collect();
+
+        // For each player, calculate their rating at each possible rank
+        for (player_idx, player) in players.iter().enumerate() {
+            let mut player_scenarios = Vec::new();
+
+            for rank in 1..=num_players {
+                // Create rankings where this player gets this rank
+                // and others get distributed ranks
+                let rankings = self.create_balanced_rankings(players, player_idx, rank);
+
+                // Calculate rating changes for this scenario
+                match self.rating_calculator.calculate_rating_changes(&player_ratings, &rankings) {
+                    Ok(result) => {
+                        if let Some(change) = result.rating_changes.iter()
+                            .find(|c| c.player_id == player.id) {
+                            
+                            let scenario = RatingScenario {
+                                player_id: player.id.clone(),
+                                rank: rank as u32,
+                                current_rating: player.rating.clone(),
+                                predicted_rating: change.new_rating.clone(),
+                                rating_delta: change.new_rating.rating - player.rating.rating,
+                            };
+                            
+                            player_scenarios.push(scenario.clone());
+                            scenarios.push(scenario);
+                        }
+                    },
+                    Err(e) => {
+                        warn!("Failed to calculate rating scenario for player {} at rank {}: {}", 
+                             player.id, rank, e);
+                    }
+                }
+            }
+
+            // Create player range summary
+            if !player_scenarios.is_empty() {
+                let best_scenario = player_scenarios.iter()
+                    .max_by(|a, b| a.rating_delta.partial_cmp(&b.rating_delta).unwrap())
+                    .unwrap();
+                let worst_scenario = player_scenarios.iter()
+                    .min_by(|a, b| a.rating_delta.partial_cmp(&b.rating_delta).unwrap())
+                    .unwrap();
+
+                player_ranges.push(PlayerRatingRange {
+                    player_id: player.id.clone(),
+                    current_rating: player.rating.clone(),
+                    best_case_rating: best_scenario.predicted_rating.clone(),
+                    worst_case_rating: worst_scenario.predicted_rating.clone(),
+                    max_gain: best_scenario.rating_delta,
+                    max_loss: worst_scenario.rating_delta,
+                });
+            }
+        }
+
+        RatingScenariosTable {
+            scenarios,
+            player_ranges,
+        }
+    }
+
+    /// Create balanced rankings for a scenario where one player gets a specific rank
+    fn create_balanced_rankings(&self, players: &[Player], target_player_idx: usize, target_rank: usize) -> Vec<(String, u32)> {
+        let num_players = players.len();
+        let mut rankings = Vec::new();
+
+        // Assign target player their rank
+        rankings.push((players[target_player_idx].id.clone(), target_rank as u32));
+
+        // Distribute other ranks among remaining players
+        let mut available_ranks: Vec<usize> = (1..=num_players)
+            .filter(|&r| r != target_rank)
+            .collect();
+
+        // Sort available ranks to distribute them evenly
+        available_ranks.sort();
+
+        let mut rank_idx = 0;
+        for (player_idx, player) in players.iter().enumerate() {
+            if player_idx != target_player_idx {
+                let rank = available_ranks[rank_idx % available_ranks.len()];
+                rankings.push((player.id.clone(), rank as u32));
+                rank_idx += 1;
+            }
+        }
+
+        rankings
     }
 
     /// Check if a lobby should start a game and initiate if ready
     async fn check_and_start_game(&self, lobby_id: LobbyId) -> Result<()> {
+        info!("Checking if lobby {} is ready to start game...", lobby_id);
+        
         let game_starting_event = {
             let mut lobbies =
                 self.lobbies
@@ -362,7 +569,31 @@ impl LobbyManager {
                         lobby_id: lobby_id.to_string(),
                     })?;
 
+            let players = lobby.get_players();
+            let human_count = players
+                .iter()
+                .filter(|p| matches!(p.player_type, crate::types::PlayerType::Human))
+                .count();
+            let bot_count = players.len() - human_count;
+            
+            info!(
+                "Lobby {} readiness check - players: {}/{}, humans: {}, bots: {}, state: {:?}, should_start: {}",
+                lobby_id, players.len(), lobby.config().capacity, 
+                human_count, bot_count, lobby.state(), lobby.should_start()
+            );
+
             if lobby.should_start() {
+                info!("Starting game for lobby {} with {} players!", lobby_id, players.len());
+                
+                // Log player details
+                for (i, player) in players.iter().enumerate() {
+                    info!(
+                        "  Player {}: '{}' ({:?}) - rating: {:.1}±{:.1}",
+                        i + 1, player.id, player.player_type,
+                        player.rating.rating, player.rating.uncertainty
+                    );
+                }
+                
                 lobby.mark_starting()?;
 
                 // Update stats
@@ -374,14 +605,12 @@ impl LobbyManager {
                                 message: "Failed to acquire stats lock".to_string(),
                             })?;
                     stats.games_started += 1;
+                    
+                    info!(
+                        "Game stats updated - total_games_started: {}, active_lobbies: {}",
+                        stats.games_started, stats.active_lobbies
+                    );
                 }
-
-                let players = lobby.get_players();
-                let human_count = players
-                    .iter()
-                    .filter(|p| matches!(p.player_type, crate::types::PlayerType::Human))
-                    .count();
-                let bot_count = players.len() - human_count;
 
                 // Record game start using the high-level API
                 self.metrics_collector.record_game_started(
@@ -390,21 +619,49 @@ impl LobbyManager {
                     bot_count,
                 );
 
+                let game_id = generate_lobby_id(); // Generate unique game ID
+                
+                info!(
+                    "Game created - game_id: {}, lobby_id: {}, type: {:?}, players: {} ({}H/{}B)",
+                    game_id, lobby_id, lobby.config().lobby_type, 
+                    players.len(), human_count, bot_count
+                );
+
+                // Calculate all possible rating scenarios
+                let rating_scenarios = self.calculate_rating_scenarios(&players);
+                
+                // Log rating scenarios for visibility
+                info!("Rating scenarios calculated for game {}:", game_id);
+                for player_range in &rating_scenarios.player_ranges {
+                    info!(
+                        "  Player '{}': current {:.1}±{:.1}, best case: {:.1} (+{:.1}), worst case: {:.1} ({:.1})",
+                        player_range.player_id,
+                        player_range.current_rating.rating,
+                        player_range.current_rating.uncertainty,
+                        player_range.best_case_rating.rating,
+                        player_range.max_gain,
+                        player_range.worst_case_rating.rating,
+                        player_range.max_loss
+                    );
+                }
+
                 Some(GameStarting {
                     lobby_id,
-                    players,
-                    game_id: generate_lobby_id(), // Generate unique game ID
-                    rating_changes_preview: vec![], // Empty for Phase 2 (no rating calculations yet)
+                    players: players.clone(),
+                    game_id,
+                    rating_scenarios,
                     timestamp: current_timestamp(),
                 })
             } else {
+                info!("Lobby {} not ready to start yet", lobby_id);
                 None
             }
         };
 
         if let Some(event) = game_starting_event {
+            info!("Publishing GameStarting event for lobby {} / game {}", lobby_id, event.game_id);
             self.event_publisher.publish_game_starting(event).await?;
-            info!("Game starting for lobby {}", lobby_id);
+            info!("Game successfully started for lobby {}!", lobby_id);
         }
 
         Ok(())
@@ -585,21 +842,6 @@ impl LobbyManager {
     }
 }
 
-// Implement Clone manually since we need to clone the Arc references
-impl Clone for LobbyManager {
-    fn clone(&self) -> Self {
-        Self {
-            lobbies: Arc::clone(&self.lobbies),
-            lobby_provider: Arc::clone(&self.lobby_provider),
-            lobby_matcher: Arc::clone(&self.lobby_matcher),
-            matching_config: self.matching_config.clone(),
-            event_publisher: Arc::clone(&self.event_publisher),
-            stats: Arc::clone(&self.stats),
-            metrics_collector: Arc::clone(&self.metrics_collector),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -629,6 +871,26 @@ mod tests {
             },
             timestamp: current_timestamp(),
             auth_token: None, // No auth token for tests
+        }
+    }
+
+    fn create_test_queue_request_with_rating(
+        player_id: &str,
+        player_type: PlayerType,
+        lobby_type: LobbyType,
+        rating: f64,
+        uncertainty: f64,
+    ) -> QueueRequest {
+        QueueRequest {
+            player_id: player_id.to_string(),
+            player_type,
+            lobby_type,
+            current_rating: PlayerRating {
+                rating,
+                uncertainty,
+            },
+            timestamp: current_timestamp(),
+            auth_token: None,
         }
     }
 
@@ -812,5 +1074,140 @@ mod tests {
             "Should have player metrics, found: {:?}",
             metric_names
         );
+    }
+
+    #[tokio::test]
+    async fn test_rating_scenarios_calculation() {
+        let manager = create_test_manager().await;
+
+        // Create players with different ratings
+        let players = vec![
+            Player {
+                id: "player1".to_string(),
+                player_type: PlayerType::Human,
+                rating: PlayerRating {
+                    rating: 1600.0,
+                    uncertainty: 150.0,
+                },
+                joined_at: current_timestamp(),
+            },
+            Player {
+                id: "player2".to_string(),
+                player_type: PlayerType::Human,
+                rating: PlayerRating {
+                    rating: 1500.0,
+                    uncertainty: 200.0,
+                },
+                joined_at: current_timestamp(),
+            },
+            Player {
+                id: "player3".to_string(),
+                player_type: PlayerType::Human,
+                rating: PlayerRating {
+                    rating: 1400.0,
+                    uncertainty: 180.0,
+                },
+                joined_at: current_timestamp(),
+            },
+            Player {
+                id: "player4".to_string(),
+                player_type: PlayerType::Human,
+                rating: PlayerRating {
+                    rating: 1450.0,
+                    uncertainty: 220.0,
+                },
+                joined_at: current_timestamp(),
+            },
+        ];
+
+        // Calculate rating scenarios
+        let scenarios_table = manager.calculate_rating_scenarios(&players);
+
+        // Verify we have scenarios for each player at each rank
+        assert_eq!(scenarios_table.scenarios.len(), 16); // 4 players × 4 ranks
+        assert_eq!(scenarios_table.player_ranges.len(), 4);
+
+        // Check that each player has scenarios for each rank
+        for player in &players {
+            let player_scenarios: Vec<_> = scenarios_table.scenarios.iter()
+                .filter(|s| s.player_id == player.id)
+                .collect();
+            assert_eq!(player_scenarios.len(), 4); // 4 ranks (1st, 2nd, 3rd, 4th)
+
+            // Check ranks are 1, 2, 3, 4
+            let mut ranks: Vec<u32> = player_scenarios.iter().map(|s| s.rank).collect();
+            ranks.sort();
+            assert_eq!(ranks, vec![1, 2, 3, 4]);
+
+            // Check rating deltas are different for different ranks
+            let rank1_scenario = player_scenarios.iter().find(|s| s.rank == 1).unwrap();
+            let rank4_scenario = player_scenarios.iter().find(|s| s.rank == 4).unwrap();
+            
+            // 1st place should have higher rating delta than 4th place
+            assert!(rank1_scenario.rating_delta > rank4_scenario.rating_delta);
+        }
+
+        // Verify player ranges
+        for player_range in &scenarios_table.player_ranges {
+            // Best case should be better than worst case
+            assert!(player_range.max_gain > player_range.max_loss);
+            
+            // Best case rating should be higher than current
+            assert!(player_range.best_case_rating.rating > player_range.current_rating.rating);
+            
+            // Worst case rating should be lower than current
+            assert!(player_range.worst_case_rating.rating < player_range.current_rating.rating);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_balanced_rankings() {
+        let manager = create_test_manager().await;
+
+        let players = vec![
+            Player {
+                id: "player1".to_string(),
+                player_type: PlayerType::Human,
+                rating: PlayerRating::default(),
+                joined_at: current_timestamp(),
+            },
+            Player {
+                id: "player2".to_string(),
+                player_type: PlayerType::Human,
+                rating: PlayerRating::default(),
+                joined_at: current_timestamp(),
+            },
+            Player {
+                id: "player3".to_string(),
+                player_type: PlayerType::Human,
+                rating: PlayerRating::default(),
+                joined_at: current_timestamp(),
+            },
+            Player {
+                id: "player4".to_string(),
+                player_type: PlayerType::Human,
+                rating: PlayerRating::default(),
+                joined_at: current_timestamp(),
+            },
+        ];
+
+        // Test rankings where player 0 gets rank 1
+        let rankings = manager.create_balanced_rankings(&players, 0, 1);
+        
+        assert_eq!(rankings.len(), 4);
+        
+        // Target player should get rank 1
+        let target_ranking = rankings.iter().find(|(id, _)| id == "player1").unwrap();
+        assert_eq!(target_ranking.1, 1);
+        
+        // All rankings should be 1-4
+        let mut ranks: Vec<u32> = rankings.iter().map(|(_, rank)| *rank).collect();
+        ranks.sort();
+        assert_eq!(ranks, vec![1, 2, 3, 4]);
+
+        // Each player should appear exactly once
+        let mut player_ids: Vec<String> = rankings.iter().map(|(id, _)| id.clone()).collect();
+        player_ids.sort();
+        assert_eq!(player_ids, vec!["player1", "player2", "player3", "player4"]);
     }
 }

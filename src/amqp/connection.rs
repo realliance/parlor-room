@@ -97,7 +97,9 @@ impl AmqpConnection {
             &config.username,
             &config.password,
         );
-        args.virtual_host(&config.vhost);
+
+        let vhost = format!("/{}", config.vhost);
+        args.virtual_host(&vhost);
 
         Connection::open(&args)
             .await

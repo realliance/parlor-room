@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for parlor-room matchmaking microservice
 # Stage 1: Build environment
-FROM rust:1.75 as builder
+FROM rust:1 as builder
 
 # Set the working directory
 WORKDIR /app
@@ -45,4 +45,3 @@ ENV RUST_BACKTRACE=1
 
 # Default command
 ENTRYPOINT ["/usr/local/bin/parlor-room"]
-CMD ["--config", "/etc/parlor-room/config.toml"] 

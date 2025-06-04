@@ -123,6 +123,36 @@ pub struct PlayerLeftLobby {
     pub timestamp: DateTime<Utc>,
 }
 
+/// Rating change scenario for different possible placements
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RatingScenario {
+    pub player_id: PlayerId,
+    pub rank: u32, // 1st, 2nd, 3rd, 4th place
+    pub current_rating: PlayerRating,
+    pub predicted_rating: PlayerRating,
+    pub rating_delta: f64, // How much rating would change (+/-)
+}
+
+/// Complete rating scenarios table for a game
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RatingScenariosTable {
+    /// All possible rating outcomes for each player at each rank
+    pub scenarios: Vec<RatingScenario>,
+    /// Quick lookup: min and max possible rating change for each player
+    pub player_ranges: Vec<PlayerRatingRange>,
+}
+
+/// Rating range summary for a player
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayerRatingRange {
+    pub player_id: PlayerId,
+    pub current_rating: PlayerRating,
+    pub best_case_rating: PlayerRating,
+    pub worst_case_rating: PlayerRating,
+    pub max_gain: f64,
+    pub max_loss: f64,
+}
+
 /// Rating change information for a player
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RatingChange {
@@ -138,7 +168,7 @@ pub struct GameStarting {
     pub lobby_id: LobbyId,
     pub game_id: GameId,
     pub players: Vec<Player>,
-    pub rating_changes_preview: Vec<RatingChange>,
+    pub rating_scenarios: RatingScenariosTable,
     pub timestamp: DateTime<Utc>,
 }
 
