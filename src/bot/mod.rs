@@ -4,7 +4,6 @@
 //! 1. Active Queuing: Bots send QueueRequest messages like humans
 //! 2. Automatic Backfilling: System adds bots when wait times expire
 
-pub mod auth;
 pub mod backfill;
 pub mod provider;
 

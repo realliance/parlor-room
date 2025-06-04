@@ -24,9 +24,6 @@ pub enum MatchmakingError {
     #[error("Player not found: {player_id}")]
     PlayerNotFound { player_id: String },
 
-    #[error("Bot authentication failed: {bot_id}")]
-    BotAuthenticationFailed { bot_id: String },
-
     #[error("Rating calculation failed: {reason}")]
     RatingCalculationFailed { reason: String },
 

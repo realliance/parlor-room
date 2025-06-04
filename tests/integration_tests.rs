@@ -47,7 +47,6 @@ async fn test_complete_general_lobby_workflow() {
             uncertainty: 200.0,
         },
         timestamp: parlor_room::utils::current_timestamp(),
-        auth_token: None,
     };
 
     let lobby_id = lobby_manager
@@ -88,7 +87,6 @@ async fn test_allbot_lobby_workflow() {
                 uncertainty: 120.0,
             },
             timestamp: parlor_room::utils::current_timestamp(),
-            auth_token: None, // Skip auth for this test
         },
         QueueRequest {
             player_id: "skilled_bot_2".to_string(),
@@ -99,7 +97,6 @@ async fn test_allbot_lobby_workflow() {
                 uncertainty: 130.0,
             },
             timestamp: parlor_room::utils::current_timestamp(),
-            auth_token: None,
         },
         QueueRequest {
             player_id: "average_bot_1".to_string(),
@@ -110,7 +107,6 @@ async fn test_allbot_lobby_workflow() {
                 uncertainty: 200.0,
             },
             timestamp: parlor_room::utils::current_timestamp(),
-            auth_token: None,
         },
         QueueRequest {
             player_id: "average_bot_2".to_string(),
@@ -121,7 +117,6 @@ async fn test_allbot_lobby_workflow() {
                 uncertainty: 180.0,
             },
             timestamp: parlor_room::utils::current_timestamp(),
-            auth_token: None,
         },
     ];
 
@@ -184,7 +179,6 @@ async fn test_mixed_lobby_with_humans_and_bots() {
             uncertainty: 180.0,
         },
         timestamp: parlor_room::utils::current_timestamp(),
-        auth_token: None,
     };
 
     let lobby_id = lobby_manager
@@ -202,7 +196,6 @@ async fn test_mixed_lobby_with_humans_and_bots() {
             uncertainty: 200.0,
         },
         timestamp: parlor_room::utils::current_timestamp(),
-        auth_token: None, // Skip auth for test
     };
 
     let bot_lobby_id = lobby_manager
@@ -248,7 +241,6 @@ async fn test_lobby_statistics() {
             uncertainty: 200.0,
         },
         timestamp: parlor_room::utils::current_timestamp(),
-        auth_token: None,
     };
 
     let _lobby_id = lobby_manager.handle_queue_request(request).await.unwrap();
@@ -276,7 +268,6 @@ async fn test_error_handling_and_recovery() {
             uncertainty: 200.0,
         },
         timestamp: parlor_room::utils::current_timestamp(),
-        auth_token: None,
     };
 
     let _result = lobby_manager.handle_queue_request(invalid_request).await;
@@ -292,7 +283,6 @@ async fn test_error_handling_and_recovery() {
             uncertainty: 200.0,
         },
         timestamp: parlor_room::utils::current_timestamp(),
-        auth_token: None,
     };
 
     let result = lobby_manager.handle_queue_request(valid_request).await;
@@ -316,7 +306,6 @@ async fn test_multiple_lobbies_creation() {
                 uncertainty: 200.0,
             },
             timestamp: parlor_room::utils::current_timestamp(),
-            auth_token: None,
         },
         QueueRequest {
             player_id: "bot_1".to_string(),
@@ -327,7 +316,6 @@ async fn test_multiple_lobbies_creation() {
                 uncertainty: 150.0,
             },
             timestamp: parlor_room::utils::current_timestamp(),
-            auth_token: None,
         },
         QueueRequest {
             player_id: "human_2".to_string(),
@@ -338,7 +326,6 @@ async fn test_multiple_lobbies_creation() {
                 uncertainty: 100.0,
             },
             timestamp: parlor_room::utils::current_timestamp(),
-            auth_token: None,
         },
     ];
 

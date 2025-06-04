@@ -70,15 +70,14 @@ async fn test_100_concurrent_queue_requests() {
     // Create concurrent queue requests
     let requests: Vec<_> = (0..concurrent_requests)
         .map(|i| QueueRequest {
-            player_id: format!("load_test_player_{}", i),
+            player_id: format!("human_{}", i),
             player_type: PlayerType::Human,
             lobby_type: LobbyType::General,
             current_rating: parlor_room::types::PlayerRating {
-                rating: 1400.0 + (i as f64 % 400.0), // Spread ratings across range
-                uncertainty: 150.0 + (i as f64 % 100.0),
+                rating: 1500.0 + (i as f64 * 10.0),
+                uncertainty: 200.0,
             },
             timestamp: parlor_room::utils::current_timestamp(),
-            auth_token: None,
         })
         .collect();
 
@@ -157,23 +156,18 @@ async fn test_1000_concurrent_queue_requests() {
                 LobbyType::General
             };
 
-            let auth_token = if player_type == PlayerType::Bot {
-                Some(format!("load_test_token_{}", i))
-            } else {
-                None
-            };
-
-            QueueRequest {
-                player_id: format!("stress_test_player_{}", i),
+            let request = QueueRequest {
+                player_id: format!("player_{}", i),
                 player_type,
                 lobby_type,
                 current_rating: parlor_room::types::PlayerRating {
-                    rating: 1200.0 + (i as f64 % 600.0), // Wide rating distribution
-                    uncertainty: 100.0 + (i as f64 % 150.0),
+                    rating: 1500.0,
+                    uncertainty: 200.0,
                 },
                 timestamp: parlor_room::utils::current_timestamp(),
-                auth_token,
-            }
+            };
+
+            request
         })
         .collect();
 
@@ -250,7 +244,7 @@ async fn test_rapid_fire_requests() {
     let mut handles = Vec::new();
     for i in 0..request_count {
         let request = QueueRequest {
-            player_id: format!("rapid_fire_player_{}", i),
+            player_id: format!("human_{}", i),
             player_type: PlayerType::Human,
             lobby_type: LobbyType::General,
             current_rating: parlor_room::types::PlayerRating {
@@ -258,7 +252,6 @@ async fn test_rapid_fire_requests() {
                 uncertainty: 200.0,
             },
             timestamp: parlor_room::utils::current_timestamp(),
-            auth_token: None,
         };
 
         let manager = lobby_manager.clone();
@@ -320,7 +313,6 @@ async fn test_concurrent_lobby_processing() {
                 uncertainty: 200.0,
             },
             timestamp: parlor_room::utils::current_timestamp(),
-            auth_token: None,
         })
         .collect();
 
@@ -390,15 +382,14 @@ async fn test_system_under_sustained_load() {
                 interval.tick().await;
 
                 let request = QueueRequest {
-                    player_id: format!("sustained_load_player_{}", counter),
+                    player_id: format!("human_{}", counter),
                     player_type: PlayerType::Human,
                     lobby_type: LobbyType::General,
                     current_rating: parlor_room::types::PlayerRating {
-                        rating: 1400.0 + (counter as f64 % 400.0),
+                        rating: 1500.0,
                         uncertainty: 200.0,
                     },
                     timestamp: parlor_room::utils::current_timestamp(),
-                    auth_token: None,
                 };
 
                 let mgr_clone = manager.clone();

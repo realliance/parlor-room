@@ -8,7 +8,6 @@
 //! Run with: `cargo test queue_tester`
 //! Or use the CLI tool: `cargo run --bin queue-tester`
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -20,23 +19,21 @@ use amqprs::{
     consumer::AsyncConsumer,
     BasicProperties, Deliver,
 };
-use anyhow::{Context, Result as AnyhowResult};
+use anyhow::Context;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use parlor_room::amqp::connection::{AmqpConfig, AmqpConnection};
 use parlor_room::amqp::messages::{
     MessageEnvelope, MessageUtils, GAME_EVENTS_EXCHANGE, PLAYER_EVENTS_EXCHANGE,
     QUEUE_REQUEST_QUEUE,
 };
-use parlor_room::types::{
-    AmqpMessage, GameStarting, LobbyType, Player, PlayerRating, PlayerType, QueueRequest,
-};
+use parlor_room::types::{GameStarting, LobbyType, PlayerRating, PlayerType, QueueRequest};
 use parlor_room::utils::current_timestamp;
+use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
-use uuid::Uuid;
 
 /// Queue tester that can simulate queue operations and monitor results against real RabbitMQ
+#[allow(dead_code)]
 pub struct QueueTester {
     amqp_connection: Arc<AmqpConnection>,
     publish_channel: amqprs::channel::Channel,
@@ -56,7 +53,6 @@ pub struct QueueStats {
     pub average_wait_time_ms: u64,
     pub human_count: u32,
     pub bot_count: u32,
-    pub matches_by_lobby_type: HashMap<LobbyType, u32>,
 }
 
 /// Configuration for queue testing scenarios
@@ -69,14 +65,35 @@ pub struct QueueTestConfig {
     pub timeout_seconds: u64,
 }
 
-/// Configuration for a player in queue tests
-#[derive(Debug, Clone)]
+/// Configuration for a test player
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerConfig {
     pub id: String,
     pub lobby_type: LobbyType,
     pub rating: f64,
     pub uncertainty: f64,
-    pub auth_token: Option<String>,
+}
+
+impl PlayerConfig {
+    /// Create a new player config
+    pub fn new(id: String, lobby_type: LobbyType, rating: f64, uncertainty: f64) -> Self {
+        Self {
+            id,
+            lobby_type,
+            rating,
+            uncertainty,
+        }
+    }
+
+    /// Create a human player config
+    pub fn human(id: String, lobby_type: LobbyType, rating: f64, uncertainty: f64) -> Self {
+        Self::new(id, lobby_type, rating, uncertainty)
+    }
+
+    /// Create a bot player config
+    pub fn bot(id: String, lobby_type: LobbyType, rating: f64, uncertainty: f64) -> Self {
+        Self::new(id, lobby_type, rating, uncertainty)
+    }
 }
 
 impl QueueTester {
@@ -115,7 +132,7 @@ impl QueueTester {
         let consumer_tag = format!("queue-tester-{}", uuid::Uuid::new_v4());
         let events_queue_name = format!("queue-tester-events-{}", uuid::Uuid::new_v4());
 
-        let mut tester = Self {
+        let tester = Self {
             amqp_connection,
             publish_channel,
             consume_channel,
@@ -225,7 +242,6 @@ impl QueueTester {
                 uncertainty,
             },
             timestamp: current_timestamp(),
-            auth_token: None,
         };
 
         let start_time = Instant::now();
@@ -252,7 +268,6 @@ impl QueueTester {
         lobby_type: LobbyType,
         rating: f64,
         uncertainty: f64,
-        auth_token: Option<String>,
     ) -> anyhow::Result<()> {
         let request = QueueRequest {
             player_id: bot_id.to_string(),
@@ -263,7 +278,6 @@ impl QueueTester {
                 uncertainty,
             },
             timestamp: current_timestamp(),
-            auth_token,
         };
 
         let start_time = Instant::now();
@@ -350,7 +364,7 @@ impl QueueTester {
                         game.game_id,
                         game.players
                             .iter()
-                            .map(|p| format!("{}({})", p.id, format!("{:?}", p.player_type)))
+                            .map(|p| format!("{}({:?})", p.id, p.player_type))
                             .collect::<Vec<_>>()
                     );
                 }
@@ -384,14 +398,8 @@ impl QueueTester {
 
         // Queue all bot players
         for bot in &config.bot_players {
-            self.queue_bot(
-                &bot.id,
-                bot.lobby_type,
-                bot.rating,
-                bot.uncertainty,
-                bot.auth_token.clone(),
-            )
-            .await?;
+            self.queue_bot(&bot.id, bot.lobby_type, bot.rating, bot.uncertainty)
+                .await?;
         }
 
         // Wait for expected matches with timeout
@@ -569,34 +577,10 @@ impl TestScenarios {
         QueueTestConfig {
             scenario_name: "Four Humans General Lobby".to_string(),
             human_players: vec![
-                PlayerConfig {
-                    id: "human_1".to_string(),
-                    lobby_type: LobbyType::General,
-                    rating: 1500.0,
-                    uncertainty: 200.0,
-                    auth_token: None,
-                },
-                PlayerConfig {
-                    id: "human_2".to_string(),
-                    lobby_type: LobbyType::General,
-                    rating: 1550.0,
-                    uncertainty: 180.0,
-                    auth_token: None,
-                },
-                PlayerConfig {
-                    id: "human_3".to_string(),
-                    lobby_type: LobbyType::General,
-                    rating: 1450.0,
-                    uncertainty: 220.0,
-                    auth_token: None,
-                },
-                PlayerConfig {
-                    id: "human_4".to_string(),
-                    lobby_type: LobbyType::General,
-                    rating: 1600.0,
-                    uncertainty: 190.0,
-                    auth_token: None,
-                },
+                PlayerConfig::human("human_1".to_string(), LobbyType::General, 1500.0, 200.0),
+                PlayerConfig::human("human_2".to_string(), LobbyType::General, 1550.0, 180.0),
+                PlayerConfig::human("human_3".to_string(), LobbyType::General, 1450.0, 220.0),
+                PlayerConfig::human("human_4".to_string(), LobbyType::General, 1600.0, 190.0),
             ],
             bot_players: vec![],
             expected_matches: 1,
@@ -610,34 +594,10 @@ impl TestScenarios {
             scenario_name: "Four Bots AllBot Lobby".to_string(),
             human_players: vec![],
             bot_players: vec![
-                PlayerConfig {
-                    id: "bot_1".to_string(),
-                    lobby_type: LobbyType::AllBot,
-                    rating: 1500.0,
-                    uncertainty: 200.0,
-                    auth_token: Some("token_bot_1".to_string()),
-                },
-                PlayerConfig {
-                    id: "bot_2".to_string(),
-                    lobby_type: LobbyType::AllBot,
-                    rating: 1550.0,
-                    uncertainty: 180.0,
-                    auth_token: Some("token_bot_2".to_string()),
-                },
-                PlayerConfig {
-                    id: "bot_3".to_string(),
-                    lobby_type: LobbyType::AllBot,
-                    rating: 1450.0,
-                    uncertainty: 220.0,
-                    auth_token: Some("token_bot_3".to_string()),
-                },
-                PlayerConfig {
-                    id: "bot_4".to_string(),
-                    lobby_type: LobbyType::AllBot,
-                    rating: 1600.0,
-                    uncertainty: 190.0,
-                    auth_token: Some("token_bot_4".to_string()),
-                },
+                PlayerConfig::bot("bot_1".to_string(), LobbyType::AllBot, 1500.0, 200.0),
+                PlayerConfig::bot("bot_2".to_string(), LobbyType::AllBot, 1550.0, 180.0),
+                PlayerConfig::bot("bot_3".to_string(), LobbyType::AllBot, 1450.0, 220.0),
+                PlayerConfig::bot("bot_4".to_string(), LobbyType::AllBot, 1600.0, 190.0),
             ],
             expected_matches: 1,
             timeout_seconds: 5,
@@ -649,36 +609,22 @@ impl TestScenarios {
         QueueTestConfig {
             scenario_name: "Mixed Lobby (2 Humans + 2 Bots)".to_string(),
             human_players: vec![
-                PlayerConfig {
-                    id: "human_mixed_1".to_string(),
-                    lobby_type: LobbyType::General,
-                    rating: 1500.0,
-                    uncertainty: 200.0,
-                    auth_token: None,
-                },
-                PlayerConfig {
-                    id: "human_mixed_2".to_string(),
-                    lobby_type: LobbyType::General,
-                    rating: 1550.0,
-                    uncertainty: 180.0,
-                    auth_token: None,
-                },
+                PlayerConfig::human(
+                    "human_mixed_1".to_string(),
+                    LobbyType::General,
+                    1500.0,
+                    200.0,
+                ),
+                PlayerConfig::human(
+                    "human_mixed_2".to_string(),
+                    LobbyType::General,
+                    1550.0,
+                    180.0,
+                ),
             ],
             bot_players: vec![
-                PlayerConfig {
-                    id: "bot_mixed_1".to_string(),
-                    lobby_type: LobbyType::General,
-                    rating: 1450.0,
-                    uncertainty: 220.0,
-                    auth_token: Some("token_mixed_1".to_string()),
-                },
-                PlayerConfig {
-                    id: "bot_mixed_2".to_string(),
-                    lobby_type: LobbyType::General,
-                    rating: 1600.0,
-                    uncertainty: 190.0,
-                    auth_token: Some("token_mixed_2".to_string()),
-                },
+                PlayerConfig::bot("bot_mixed_1".to_string(), LobbyType::General, 1450.0, 220.0),
+                PlayerConfig::bot("bot_mixed_2".to_string(), LobbyType::General, 1600.0, 190.0),
             ],
             expected_matches: 1,
             timeout_seconds: 10,
@@ -691,67 +637,59 @@ impl TestScenarios {
             scenario_name: "Multiple Simultaneous Lobbies".to_string(),
             human_players: vec![
                 // First lobby
-                PlayerConfig {
-                    id: "human_lobby1_1".to_string(),
-                    lobby_type: LobbyType::General,
-                    rating: 1500.0,
-                    uncertainty: 200.0,
-                    auth_token: None,
-                },
-                PlayerConfig {
-                    id: "human_lobby1_2".to_string(),
-                    lobby_type: LobbyType::General,
-                    rating: 1550.0,
-                    uncertainty: 180.0,
-                    auth_token: None,
-                },
+                PlayerConfig::human(
+                    "human_lobby1_1".to_string(),
+                    LobbyType::General,
+                    1500.0,
+                    200.0,
+                ),
+                PlayerConfig::human(
+                    "human_lobby1_2".to_string(),
+                    LobbyType::General,
+                    1550.0,
+                    180.0,
+                ),
                 // Second lobby
-                PlayerConfig {
-                    id: "human_lobby2_1".to_string(),
-                    lobby_type: LobbyType::General,
-                    rating: 1800.0,
-                    uncertainty: 150.0,
-                    auth_token: None,
-                },
-                PlayerConfig {
-                    id: "human_lobby2_2".to_string(),
-                    lobby_type: LobbyType::General,
-                    rating: 1850.0,
-                    uncertainty: 140.0,
-                    auth_token: None,
-                },
+                PlayerConfig::human(
+                    "human_lobby2_1".to_string(),
+                    LobbyType::General,
+                    1800.0,
+                    150.0,
+                ),
+                PlayerConfig::human(
+                    "human_lobby2_2".to_string(),
+                    LobbyType::General,
+                    1850.0,
+                    140.0,
+                ),
             ],
             bot_players: vec![
                 // Bots for first lobby
-                PlayerConfig {
-                    id: "bot_lobby1_1".to_string(),
-                    lobby_type: LobbyType::General,
-                    rating: 1450.0,
-                    uncertainty: 220.0,
-                    auth_token: Some("token_lobby1_1".to_string()),
-                },
-                PlayerConfig {
-                    id: "bot_lobby1_2".to_string(),
-                    lobby_type: LobbyType::General,
-                    rating: 1600.0,
-                    uncertainty: 190.0,
-                    auth_token: Some("token_lobby1_2".to_string()),
-                },
+                PlayerConfig::bot(
+                    "bot_lobby1_1".to_string(),
+                    LobbyType::General,
+                    1450.0,
+                    220.0,
+                ),
+                PlayerConfig::bot(
+                    "bot_lobby1_2".to_string(),
+                    LobbyType::General,
+                    1600.0,
+                    190.0,
+                ),
                 // Bots for second lobby
-                PlayerConfig {
-                    id: "bot_lobby2_1".to_string(),
-                    lobby_type: LobbyType::General,
-                    rating: 1750.0,
-                    uncertainty: 160.0,
-                    auth_token: Some("token_lobby2_1".to_string()),
-                },
-                PlayerConfig {
-                    id: "bot_lobby2_2".to_string(),
-                    lobby_type: LobbyType::General,
-                    rating: 1900.0,
-                    uncertainty: 130.0,
-                    auth_token: Some("token_lobby2_2".to_string()),
-                },
+                PlayerConfig::bot(
+                    "bot_lobby2_1".to_string(),
+                    LobbyType::General,
+                    1750.0,
+                    160.0,
+                ),
+                PlayerConfig::bot(
+                    "bot_lobby2_2".to_string(),
+                    LobbyType::General,
+                    1900.0,
+                    130.0,
+                ),
             ],
             expected_matches: 2,
             timeout_seconds: 15,
@@ -801,13 +739,7 @@ mod tests {
             .expect("Failed to create queue tester");
 
         let result = tester
-            .queue_bot(
-                "test_bot",
-                LobbyType::AllBot,
-                1500.0,
-                200.0,
-                Some("test_token".to_string()),
-            )
+            .queue_bot("test_bot", LobbyType::AllBot, 1500.0, 200.0)
             .await;
 
         assert!(result.is_ok(), "Failed to queue bot: {:?}", result);
@@ -935,22 +867,10 @@ mod tests {
                     .queue_human("bg_human_2", LobbyType::General, 1550.0, 180.0)
                     .await;
                 let _ = tester
-                    .queue_bot(
-                        "bg_bot_1",
-                        LobbyType::General,
-                        1450.0,
-                        220.0,
-                        Some("bg_token_1".to_string()),
-                    )
+                    .queue_bot("bg_bot_1", LobbyType::General, 1450.0, 220.0)
                     .await;
                 let _ = tester
-                    .queue_bot(
-                        "bg_bot_2",
-                        LobbyType::General,
-                        1600.0,
-                        190.0,
-                        Some("bg_token_2".to_string()),
-                    )
+                    .queue_bot("bg_bot_2", LobbyType::General, 1600.0, 190.0)
                     .await;
             }
         });

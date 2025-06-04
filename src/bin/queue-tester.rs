@@ -72,9 +72,6 @@ enum Commands {
         /// Rating uncertainty
         #[arg(short, long, default_value = "200.0")]
         uncertainty: f64,
-        /// Authentication token
-        #[arg(short, long)]
-        token: String,
     },
     /// Monitor queues for activity
     Monitor {
@@ -166,13 +163,9 @@ async fn main() -> Result<()> {
             lobby,
             rating,
             uncertainty,
-            token,
         } => {
             let lobby_type = parse_lobby_type(&lobby)?;
-            match tester
-                .queue_bot(&id, lobby_type, rating, uncertainty, Some(token))
-                .await
-            {
+            match tester.queue_bot(&id, lobby_type, rating, uncertainty).await {
                 Ok(_) => {
                     println!("✅ Successfully queued bot '{}'", id);
                     println!("💡 Use 'monitor' command to see when matches are formed");

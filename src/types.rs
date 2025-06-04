@@ -99,8 +99,6 @@ pub struct QueueRequest {
     pub lobby_type: LobbyType,
     pub current_rating: PlayerRating,
     pub timestamp: DateTime<Utc>,
-    /// Optional authentication token for bots
-    pub auth_token: Option<String>,
 }
 
 /// Event emitted when a player/bot joins a lobby

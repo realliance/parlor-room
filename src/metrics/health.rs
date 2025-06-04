@@ -52,7 +52,7 @@ pub struct HealthServer {
     config: HealthServerConfig,
     state: HealthServerState,
     shutdown_tx: broadcast::Sender<()>,
-    shutdown_rx: broadcast::Receiver<()>,
+    _shutdown_rx: broadcast::Receiver<()>,
 }
 
 impl HealthServer {
@@ -67,7 +67,7 @@ impl HealthServer {
                 app_state: None,
             },
             shutdown_tx,
-            shutdown_rx,
+            _shutdown_rx: shutdown_rx,
         }
     }
 

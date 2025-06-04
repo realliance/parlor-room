@@ -1,8 +1,11 @@
-//! AMQP message handlers for processing incoming requests
+//! AMQP message handlers for processing queue requests and events
+//!
+//! This module provides the message handling infrastructure for the matchmaking service,
+//! including request processing, error handling, and dead letter queue management.
 
 use crate::amqp::messages::MessageUtils;
 use crate::error::{MatchmakingError, Result};
-use crate::types::*;
+use crate::types::QueueRequest;
 use amqprs::{
     channel::{BasicCancelArguments, BasicConsumeArguments, Channel},
     consumer::AsyncConsumer,
@@ -10,22 +13,19 @@ use amqprs::{
 };
 use async_trait::async_trait;
 use std::sync::Arc;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
-/// Trait for handling different types of messages
+/// Trait defining the interface for handling AMQP messages
 #[async_trait]
 pub trait MessageHandler: Send + Sync {
-    /// Handle a queue request from a player or bot
+    /// Handle a queue request from a user/bot
     async fn handle_queue_request(&self, request: QueueRequest) -> Result<()>;
 
-    /// Handle bot authentication
-    async fn authenticate_bot(&self, player_id: &str, auth_token: &str) -> Result<bool>;
-
-    /// Handle message processing errors
+    /// Handle processing errors
     async fn handle_error(&self, error: MatchmakingError, message_data: &[u8]);
 }
 
-/// AMQP consumer for processing queue requests
+/// Consumer for handling queue request messages
 pub struct QueueRequestConsumer {
     handler: Arc<dyn MessageHandler>,
     channel: Channel,
@@ -97,20 +97,21 @@ impl AsyncConsumer for QueueConsumer {
         let delivery_tag = deliver.delivery_tag();
         let routing_key = deliver.routing_key();
         let message_size = _content.len();
-        
+
         info!(
             "AMQP message received - delivery_tag: {}, routing_key: '{}', size: {} bytes",
             delivery_tag, routing_key, message_size
         );
-        
+
         let start_time = std::time::Instant::now();
-        
+
         match self.process_message(&_content).await {
             Ok(_) => {
                 let processing_time = start_time.elapsed();
                 info!(
                     "Message processed successfully - delivery_tag: {}, processing_time: {:.2}ms",
-                    delivery_tag, processing_time.as_secs_f64() * 1000.0
+                    delivery_tag,
+                    processing_time.as_secs_f64() * 1000.0
                 );
             }
             Err(e) => {
@@ -136,60 +137,20 @@ impl QueueConsumer {
     /// Process an incoming message
     async fn process_message(&self, content: &[u8]) -> Result<()> {
         info!("Deserializing queue request message...");
-        
+
         // Try to deserialize as a queue request
         let request = MessageUtils::deserialize_queue_request(content)?;
 
         info!(
             "Queue request parsed - player_id: '{}', player_type: {:?}, lobby_type: {:?}, rating: {:.1}±{:.1}",
-            request.player_id, 
-            request.player_type, 
+            request.player_id,
+            request.player_type,
             request.lobby_type,
             request.current_rating.rating,
             request.current_rating.uncertainty
         );
 
-        // Authenticate bot requests
-        if request.player_type == PlayerType::Bot {
-            info!("Authenticating bot request for '{}'", request.player_id);
-            
-            if let Some(auth_token) = &request.auth_token {
-                let auth_start = std::time::Instant::now();
-                let is_authenticated = self
-                    .handler
-                    .authenticate_bot(&request.player_id, auth_token)
-                    .await?;
-                let auth_time = auth_start.elapsed();
-
-                if !is_authenticated {
-                    warn!(
-                        "Bot authentication failed - bot_id: '{}', auth_time: {:.2}ms",
-                        request.player_id, 
-                        auth_time.as_secs_f64() * 1000.0
-                    );
-                    return Err(MatchmakingError::BotAuthenticationFailed {
-                        bot_id: request.player_id.clone(),
-                    }
-                    .into());
-                }
-
-                info!(
-                    "Bot authenticated successfully - bot_id: '{}', auth_time: {:.2}ms", 
-                    request.player_id, 
-                    auth_time.as_secs_f64() * 1000.0
-                );
-            } else {
-                warn!("Bot request missing auth token - bot_id: '{}'", request.player_id);
-                return Err(MatchmakingError::InvalidQueueRequest {
-                    reason: "Bot requests must include authentication token".to_string(),
-                }
-                .into());
-            }
-        } else {
-            info!("Processing human player request for '{}'", request.player_id);
-        }
-
-        // Handle the validated request
+        // Process the request directly (no authentication needed)
         info!("Forwarding queue request to lobby manager...");
         self.handler.handle_queue_request(request).await?;
 
@@ -205,7 +166,7 @@ pub struct DeadLetterHandler {
 }
 
 impl DeadLetterHandler {
-    /// Create a new dead letter handler
+    /// Create a new dead letter queue handler
     pub fn new(channel: Channel, max_retries: u32) -> Self {
         Self {
             _channel: channel,
@@ -251,44 +212,30 @@ impl DeadLetterHandler {
 }
 
 /// Mock message handler for testing
-#[cfg(test)]
 pub struct MockMessageHandler {
     pub received_requests: Arc<tokio::sync::Mutex<Vec<QueueRequest>>>,
-    pub auth_results: std::collections::HashMap<String, bool>,
 }
 
-#[cfg(test)]
 impl Default for MockMessageHandler {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(test)]
 impl MockMessageHandler {
     pub fn new() -> Self {
         Self {
             received_requests: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-            auth_results: std::collections::HashMap::new(),
         }
-    }
-
-    pub fn set_auth_result(&mut self, bot_id: String, result: bool) {
-        self.auth_results.insert(bot_id, result);
     }
 }
 
-#[cfg(test)]
 #[async_trait]
 impl MessageHandler for MockMessageHandler {
     async fn handle_queue_request(&self, request: QueueRequest) -> Result<()> {
         let mut requests = self.received_requests.lock().await;
         requests.push(request);
         Ok(())
-    }
-
-    async fn authenticate_bot(&self, player_id: &str, _auth_token: &str) -> Result<bool> {
-        Ok(self.auth_results.get(player_id).copied().unwrap_or(false))
     }
 
     async fn handle_error(&self, error: MatchmakingError, _message_data: &[u8]) {
@@ -298,6 +245,8 @@ impl MessageHandler for MockMessageHandler {
 
 #[cfg(test)]
 mod tests {
+    use crate::{LobbyType, PlayerRating, PlayerType};
+
     use super::*;
 
     fn create_test_queue_request() -> QueueRequest {
@@ -309,8 +258,7 @@ mod tests {
                 rating: 1500.0,
                 uncertainty: 200.0,
             },
-            timestamp: chrono::Utc::now(),
-            auth_token: None,
+            timestamp: crate::utils::current_timestamp(),
         }
     }
 
@@ -319,7 +267,6 @@ mod tests {
         let handler = MockMessageHandler::new();
         let request = create_test_queue_request();
 
-        // Test handling a request
         handler.handle_queue_request(request.clone()).await.unwrap();
 
         let received = handler.received_requests.lock().await;
@@ -327,28 +274,9 @@ mod tests {
         assert_eq!(received[0].player_id, request.player_id);
     }
 
-    #[tokio::test]
-    async fn test_bot_authentication() {
-        let mut handler = MockMessageHandler::new();
-        handler.set_auth_result("test_bot".to_string(), true);
-
-        let result = handler.authenticate_bot("test_bot", "token").await.unwrap();
-        assert!(result);
-
-        let result = handler
-            .authenticate_bot("unknown_bot", "token")
-            .await
-            .unwrap();
-        assert!(!result);
-    }
-
     #[test]
     fn test_dead_letter_handler_creation() {
-        // Note: This test would need a real channel in integration tests
-        // For unit test, we just verify the structure
-        assert_eq!(
-            std::mem::size_of::<DeadLetterHandler>(),
-            std::mem::size_of::<DeadLetterHandler>()
-        );
+        // Note: This test can't create a real channel without a connection
+        // In practice, the handler would be tested with integration tests
     }
 }

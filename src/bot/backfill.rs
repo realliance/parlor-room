@@ -352,7 +352,7 @@ impl BackfillManager for DefaultBackfillManager {
             self.config.max_rating_tolerance,
             bots_needed,
         )
-        .excluding_bots(existing_bot_ids);
+        .exclude_bots(existing_bot_ids);
 
         debug!(
             "Selecting {} bots around rating {:.1} for lobby {}",

@@ -107,14 +107,6 @@ impl MessageUtils {
             .into());
         }
 
-        // Bot requests must have authentication token
-        if request.player_type == PlayerType::Bot && request.auth_token.is_none() {
-            return Err(MatchmakingError::InvalidQueueRequest {
-                reason: "Bot requests must include authentication token".to_string(),
-            }
-            .into());
-        }
-
         Ok(())
     }
 
@@ -153,7 +145,6 @@ mod tests {
                 uncertainty: 200.0,
             },
             timestamp: chrono::Utc::now(),
-            auth_token: None,
         }
     }
 
@@ -181,10 +172,9 @@ mod tests {
         invalid_request.current_rating.rating = -100.0;
         assert!(MessageUtils::validate_queue_request(&invalid_request).is_err());
 
-        // Test bot without auth token
+        // Test negative uncertainty
         let mut invalid_request = create_test_queue_request();
-        invalid_request.player_type = PlayerType::Bot;
-        invalid_request.auth_token = None;
+        invalid_request.current_rating.uncertainty = -50.0;
         assert!(MessageUtils::validate_queue_request(&invalid_request).is_err());
     }
 

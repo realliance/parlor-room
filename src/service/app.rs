@@ -7,7 +7,6 @@ use crate::amqp::connection::{AmqpConfig, AmqpConnection};
 use crate::amqp::handlers::{MessageHandler, QueueRequestConsumer};
 use crate::amqp::messages::QUEUE_REQUEST_QUEUE;
 use crate::amqp::publisher::{AmqpEventPublisher, PublisherConfig};
-use crate::bot::auth::{BotAuthenticator, DefaultBotAuthenticator};
 use crate::bot::backfill::{BackfillConfig, DefaultBackfillManager};
 use crate::bot::provider::MockBotProvider;
 use crate::config::AppConfig;
@@ -50,18 +49,11 @@ pub enum ServiceError {
 /// Production message handler that integrates with LobbyManager
 struct ProductionMessageHandler {
     lobby_manager: Arc<RwLock<LobbyManager>>,
-    bot_authenticator: Arc<DefaultBotAuthenticator>,
 }
 
 impl ProductionMessageHandler {
-    fn new(
-        lobby_manager: Arc<RwLock<LobbyManager>>,
-        bot_authenticator: Arc<DefaultBotAuthenticator>,
-    ) -> Self {
-        Self {
-            lobby_manager,
-            bot_authenticator,
-        }
+    fn new(lobby_manager: Arc<RwLock<LobbyManager>>) -> Self {
+        Self { lobby_manager }
     }
 }
 
@@ -98,42 +90,6 @@ impl MessageHandler for ProductionMessageHandler {
                 Err(e)
             }
         }
-    }
-
-    async fn authenticate_bot(&self, player_id: &str, auth_token: &str) -> MatchmakingResult<bool> {
-        info!(
-            "Authenticating bot '{}' with production authenticator",
-            player_id
-        );
-
-        let start_time = std::time::Instant::now();
-        let result = self
-            .bot_authenticator
-            .authenticate_bot(player_id, auth_token)
-            .await;
-
-        let auth_time = start_time.elapsed();
-
-        match &result {
-            Ok(true) => info!(
-                "Bot authentication successful - bot: '{}', time: {:.2}ms",
-                player_id,
-                auth_time.as_secs_f64() * 1000.0
-            ),
-            Ok(false) => warn!(
-                "Bot authentication failed - bot: '{}', time: {:.2}ms (invalid credentials)",
-                player_id,
-                auth_time.as_secs_f64() * 1000.0
-            ),
-            Err(e) => error!(
-                "Bot authentication error - bot: '{}', time: {:.2}ms, error: {}",
-                player_id,
-                auth_time.as_secs_f64() * 1000.0,
-                e
-            ),
-        }
-
-        result
     }
 
     async fn handle_error(&self, error: MatchmakingError, message_data: &[u8]) {
@@ -452,7 +408,6 @@ impl AppState {
 
         // Initialize bot system
         let bot_provider = Arc::new(MockBotProvider::new());
-        let _bot_authenticator = Arc::new(DefaultBotAuthenticator::new(bot_provider.clone()));
 
         // Initialize wait time tracking
         let wait_time_config = WaitTimeConfig::default();
@@ -549,18 +504,9 @@ impl AppState {
 
         info!("Queue '{}' declared successfully", QUEUE_REQUEST_QUEUE);
 
-        // Initialize bot authenticator
-        info!("Initializing bot authentication system...");
-        let bot_provider = Arc::new(MockBotProvider::new());
-        let bot_authenticator = Arc::new(DefaultBotAuthenticator::new(bot_provider));
-        info!("Bot authenticator initialized");
-
         // Create message handler
         info!("Creating production message handler...");
-        let message_handler = Arc::new(ProductionMessageHandler::new(
-            self.lobby_manager.clone(),
-            bot_authenticator,
-        ));
+        let message_handler = Arc::new(ProductionMessageHandler::new(self.lobby_manager.clone()));
         info!("Production message handler created");
 
         // Create and configure consumer

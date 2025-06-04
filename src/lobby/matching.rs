@@ -15,7 +15,7 @@ pub enum MatchingResult {
     MatchedToLobby(LobbyId),
     /// No suitable lobby found, should create new one
     CreateNewLobby,
-    /// Player should wait for better match (used for future rating-based matching)
+    /// Player should wait for better match
     ShouldWait { reason: String },
 }
 
@@ -24,18 +24,18 @@ pub enum MatchingResult {
 pub struct MatchingConfig {
     /// Maximum rating difference allowed for matching
     pub max_rating_difference: f64,
-    /// Whether to use strict rating matching
-    pub strict_rating_matching: bool,
     /// Whether to prefer lobbies with same player types
     pub prefer_same_player_types: bool,
+    /// Minimum score threshold to wait for better matches
+    pub wait_threshold: f64,
 }
 
 impl Default for MatchingConfig {
     fn default() -> Self {
         Self {
-            max_rating_difference: 300.0,  // ±300 rating points
-            strict_rating_matching: false, // Can be enabled for competitive play
+            max_rating_difference: 300.0, // ±300 rating points
             prefer_same_player_types: false,
+            wait_threshold: 30.0, // Minimum score to join a lobby
         }
     }
 }
@@ -62,19 +62,19 @@ pub trait LobbyMatcher: Send + Sync {
     fn can_player_join_lobby(&self, player: &Player, lobby: &dyn Lobby) -> bool;
 }
 
-/// Basic lobby matcher implementation
+/// Rating-based lobby matcher implementation
 ///
 /// This matcher focuses on:
 /// - Player type compatibility
 /// - Lobby availability (not full, not started)
-/// - Basic priority ordering (humans first in general lobbies)
 /// - Rating-based compatibility using Weng-Lin algorithm
+/// - Smart waiting logic for better matches
 #[derive(Debug)]
-pub struct BasicLobbyMatcher {
+pub struct RatingBasedLobbyMatcher {
     rating_calculator: WengLinRatingCalculator,
 }
 
-impl BasicLobbyMatcher {
+impl RatingBasedLobbyMatcher {
     pub fn new() -> Self {
         Self {
             rating_calculator: WengLinRatingCalculator::new(ExtendedWengLinConfig::default())
@@ -146,52 +146,67 @@ impl BasicLobbyMatcher {
     }
 
     /// Calculate rating compatibility score using Weng-Lin algorithm
-    fn rating_score(&self, player: &Player, lobby: &dyn Lobby, config: &MatchingConfig) -> f64 {
-        // If rating matching is disabled, return neutral score
-        if !config.strict_rating_matching {
-            return 0.0;
-        }
-
+    fn rating_compatibility_score(
+        &self,
+        player: &Player,
+        lobby: &dyn Lobby,
+        config: &MatchingConfig,
+    ) -> f64 {
         let lobby_players = lobby.get_players();
         if lobby_players.is_empty() {
-            return 10.0; // Neutral positive score for empty lobby
+            return 50.0; // High neutral score for empty lobby
         }
 
-        // Extract opponent ratings from lobby players
-        let opponent_ratings: Vec<_> = lobby_players.iter().map(|p| p.rating.clone()).collect();
+        // Extract all player ratings including the lobby players
+        let all_ratings: Vec<_> = lobby_players
+            .iter()
+            .map(|p| p.rating.clone())
+            .chain(std::iter::once(player.rating.clone()))
+            .collect();
 
-        // Calculate expected score using Weng-Lin algorithm
-        let expected_score = self.rating_calculator
+        // Calculate match quality for the entire potential lobby
+        let match_quality = self.rating_calculator.calculate_match_quality(&all_ratings);
+
+        // Convert match quality (0.0-1.0) to compatibility score (0.0-100.0)
+        let base_score = match_quality * 100.0;
+
+        // Check individual compatibility with each player in lobby
+        let opponent_ratings: Vec<_> = lobby_players.iter().map(|p| p.rating.clone()).collect();
+        let expected_score = self
+            .rating_calculator
             .calculate_expected_score(&player.rating, &opponent_ratings);
 
-        // Convert expected score to lobby score
-        // Expected score of 0.5 means balanced match (good)
-        // Expected score closer to 0.5 gets higher score
-        let balance_score = 1.0 - (expected_score - 0.5).abs() * 2.0; // 0.0 to 1.0
-        let weighted_score = balance_score * 35.0; // Scale to 0-35 points
+        // Bonus for balanced expected scores (closer to 0.5)
+        let balance_bonus = (1.0 - (expected_score - 0.5).abs() * 2.0) * 20.0;
 
         // Check rating compatibility using tolerance
         let max_uncertainty_units = config.max_rating_difference / 200.0; // Convert to uncertainty units
-        let all_compatible = opponent_ratings.iter()
-            .all(|opp_rating| self.rating_calculator
-                .are_players_compatible(&player.rating, opp_rating, max_uncertainty_units));
+        let all_compatible = opponent_ratings.iter().all(|opp_rating| {
+            self.rating_calculator.are_players_compatible(
+                &player.rating,
+                opp_rating,
+                max_uncertainty_units,
+            )
+        });
+
+        let final_score = base_score + balance_bonus;
 
         if all_compatible {
-            weighted_score
+            final_score
         } else {
             // Heavily penalize incompatible ratings
-            weighted_score - 25.0
+            final_score - 50.0
         }
     }
 }
 
-impl Default for BasicLobbyMatcher {
+impl Default for RatingBasedLobbyMatcher {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl LobbyMatcher for BasicLobbyMatcher {
+impl LobbyMatcher for RatingBasedLobbyMatcher {
     fn find_lobby_for_player(
         &self,
         player: &Player,
@@ -207,6 +222,11 @@ impl LobbyMatcher for BasicLobbyMatcher {
 
             let score = self.calculate_lobby_score(player, *lobby, config);
 
+            // Consider waiting if no good matches found
+            if score < config.wait_threshold && !lobby.get_players().is_empty() {
+                continue;
+            }
+
             if let Some((_, best_score)) = best_lobby {
                 if score > best_score {
                     best_lobby = Some((lobby.lobby_id(), score));
@@ -219,8 +239,18 @@ impl LobbyMatcher for BasicLobbyMatcher {
         match best_lobby {
             Some((lobby_id, score)) if score > 0.0 => Ok(MatchingResult::MatchedToLobby(lobby_id)),
             _ => {
-                // No suitable lobby found, should create new one
-                Ok(MatchingResult::CreateNewLobby)
+                // Check if we should wait for better match or create new lobby
+                if !available_lobbies.is_empty()
+                    && available_lobbies
+                        .iter()
+                        .any(|l| !l.get_players().is_empty())
+                {
+                    Ok(MatchingResult::ShouldWait {
+                        reason: format!("No suitable lobby found with rating compatibility. Player rating: {:.1}", player.rating.rating)
+                    })
+                } else {
+                    Ok(MatchingResult::CreateNewLobby)
+                }
             }
         }
     }
@@ -246,165 +276,14 @@ impl LobbyMatcher for BasicLobbyMatcher {
         // Wait time considerations
         total_score += self.wait_time_score(lobby) * 0.6;
 
-        // Rating compatibility using Weng-Lin algorithm
-        total_score += self.rating_score(player, lobby, config) * 0.4;
+        // Rating compatibility using Weng-Lin algorithm (high weight since this is our primary focus)
+        total_score += self.rating_compatibility_score(player, lobby, config) * 1.2;
 
         total_score
     }
 
     fn can_player_join_lobby(&self, player: &Player, lobby: &dyn Lobby) -> bool {
         self.is_lobby_eligible(player, lobby) && !lobby.is_full()
-    }
-}
-
-/// Advanced lobby matcher with rating-based matching
-#[derive(Debug)]
-pub struct RatingBasedLobbyMatcher {
-    basic_matcher: BasicLobbyMatcher,
-    rating_calculator: WengLinRatingCalculator,
-}
-
-impl RatingBasedLobbyMatcher {
-    pub fn new() -> Self {
-        Self {
-            basic_matcher: BasicLobbyMatcher::new(),
-            rating_calculator: WengLinRatingCalculator::new(ExtendedWengLinConfig::default())
-                .expect("Failed to create rating calculator"),
-        }
-    }
-
-    pub fn with_rating_config(config: ExtendedWengLinConfig) -> Result<Self> {
-        Ok(Self {
-            basic_matcher: BasicLobbyMatcher::with_rating_config(config.clone())?,
-            rating_calculator: WengLinRatingCalculator::new(config)?,
-        })
-    }
-
-    /// Calculate rating compatibility score using Weng-Lin algorithm
-    fn rating_compatibility_score(
-        &self,
-        player: &Player,
-        lobby: &dyn Lobby,
-        config: &MatchingConfig,
-    ) -> f64 {
-        if !config.strict_rating_matching {
-            return 0.0; // Disabled
-        }
-
-        let lobby_players = lobby.get_players();
-        if lobby_players.is_empty() {
-            return 50.0; // High neutral score for empty lobby
-        }
-
-        // Extract all player ratings including the lobby players
-        let all_ratings: Vec<_> = lobby_players.iter()
-            .map(|p| p.rating.clone())
-            .chain(std::iter::once(player.rating.clone()))
-            .collect();
-
-        // Calculate match quality for the entire potential lobby
-        let match_quality = self.rating_calculator.calculate_match_quality(&all_ratings);
-
-        // Convert match quality (0.0-1.0) to compatibility score (0.0-100.0)
-        let base_score = match_quality * 100.0;
-
-        // Check individual compatibility with each player in lobby
-        let opponent_ratings: Vec<_> = lobby_players.iter().map(|p| p.rating.clone()).collect();
-        let expected_score = self.rating_calculator
-            .calculate_expected_score(&player.rating, &opponent_ratings);
-
-        // Bonus for balanced expected scores (closer to 0.5)
-        let balance_bonus = (1.0 - (expected_score - 0.5).abs() * 2.0) * 20.0;
-
-        base_score + balance_bonus
-    }
-}
-
-impl Default for RatingBasedLobbyMatcher {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl LobbyMatcher for RatingBasedLobbyMatcher {
-    fn find_lobby_for_player(
-        &self,
-        player: &Player,
-        available_lobbies: &[&dyn Lobby],
-        config: &MatchingConfig,
-    ) -> Result<MatchingResult> {
-        // If strict rating matching is enabled, use rating-based approach
-        if config.strict_rating_matching {
-            let mut best_lobby: Option<(LobbyId, f64)> = None;
-            let should_wait_threshold = 30.0; // Minimum score to join a lobby
-
-            for lobby in available_lobbies {
-                if !self.can_player_join_lobby(player, *lobby) {
-                    continue;
-                }
-
-                let score = self.calculate_lobby_score(player, *lobby, config);
-
-                // Consider waiting if no good matches found
-                if score < should_wait_threshold && !lobby.get_players().is_empty() {
-                    continue;
-                }
-
-                if let Some((_, best_score)) = best_lobby {
-                    if score > best_score {
-                        best_lobby = Some((lobby.lobby_id(), score));
-                    }
-                } else {
-                    best_lobby = Some((lobby.lobby_id(), score));
-                }
-            }
-
-            match best_lobby {
-                Some((lobby_id, score)) if score > 0.0 => Ok(MatchingResult::MatchedToLobby(lobby_id)),
-                _ => {
-                    // Check if we should wait for better match or create new lobby
-                    if !available_lobbies.is_empty() && 
-                       available_lobbies.iter().any(|l| !l.get_players().is_empty()) {
-                        Ok(MatchingResult::ShouldWait { 
-                            reason: format!("No suitable lobby found with rating compatibility. Player rating: {:.1}", player.rating.rating)
-                        })
-                    } else {
-                        Ok(MatchingResult::CreateNewLobby)
-                    }
-                }
-            }
-        } else {
-            // Fall back to basic matcher when rating matching is disabled
-            self.basic_matcher
-                .find_lobby_for_player(player, available_lobbies, config)
-        }
-    }
-
-    fn calculate_lobby_score(
-        &self,
-        player: &Player,
-        lobby: &dyn Lobby,
-        config: &MatchingConfig,
-    ) -> f64 {
-        if !self.can_player_join_lobby(player, lobby) {
-            return 0.0;
-        }
-
-        // Start with basic score
-        let mut score = self
-            .basic_matcher
-            .calculate_lobby_score(player, lobby, config);
-
-        // Add rating-based scoring if enabled
-        if config.strict_rating_matching {
-            score += self.rating_compatibility_score(player, lobby, config) * 1.2;
-        }
-
-        score
-    }
-
-    fn can_player_join_lobby(&self, player: &Player, lobby: &dyn Lobby) -> bool {
-        self.basic_matcher.can_player_join_lobby(player, lobby)
     }
 }
 
@@ -429,8 +308,8 @@ mod tests {
     }
 
     #[test]
-    fn test_basic_matcher_allbot_lobby() {
-        let matcher = BasicLobbyMatcher::new();
+    fn test_matcher_allbot_lobby() {
+        let matcher = RatingBasedLobbyMatcher::new();
         let config = MatchingConfig::default();
 
         let bot = create_test_player("bot1", PlayerType::Bot, 1500.0);
@@ -453,8 +332,8 @@ mod tests {
     }
 
     #[test]
-    fn test_basic_matcher_general_lobby() {
-        let matcher = BasicLobbyMatcher::new();
+    fn test_matcher_general_lobby() {
+        let matcher = RatingBasedLobbyMatcher::new();
         let config = MatchingConfig::default();
 
         let bot = create_test_player("bot1", PlayerType::Bot, 1500.0);
@@ -477,7 +356,7 @@ mod tests {
 
     #[test]
     fn test_lobby_scoring() {
-        let matcher = BasicLobbyMatcher::new();
+        let matcher = RatingBasedLobbyMatcher::new();
         let config = MatchingConfig::default();
 
         let bot = create_test_player("bot1", PlayerType::Bot, 1500.0);
@@ -494,7 +373,7 @@ mod tests {
 
     #[test]
     fn test_can_player_join_lobby() {
-        let matcher = BasicLobbyMatcher::new();
+        let matcher = RatingBasedLobbyMatcher::new();
 
         let bot = create_test_player("bot1", PlayerType::Bot, 1500.0);
         let human = create_test_player("human1", PlayerType::Human, 1500.0);
@@ -513,7 +392,7 @@ mod tests {
 
     #[test]
     fn test_no_available_lobbies() {
-        let matcher = BasicLobbyMatcher::new();
+        let matcher = RatingBasedLobbyMatcher::new();
         let config = MatchingConfig::default();
 
         let bot = create_test_player("bot1", PlayerType::Bot, 1500.0);
@@ -527,7 +406,7 @@ mod tests {
 
     #[test]
     fn test_fullness_scoring() {
-        let matcher = BasicLobbyMatcher::new();
+        let matcher = RatingBasedLobbyMatcher::new();
 
         let empty_lobby = LobbyInstance::new(LobbyConfiguration::general());
         let mut partial_lobby = LobbyInstance::new(LobbyConfiguration::general());
@@ -544,18 +423,24 @@ mod tests {
     }
 
     #[test]
-    fn test_rating_based_matcher_fallback() {
+    fn test_rating_compatibility() {
         let matcher = RatingBasedLobbyMatcher::new();
         let config = MatchingConfig::default();
 
-        let bot = create_test_player("bot1", PlayerType::Bot, 1500.0);
-        let lobby = LobbyInstance::new(LobbyConfiguration::all_bot());
-        let lobbies: Vec<&dyn Lobby> = vec![&lobby];
+        let player = create_test_player("player1", PlayerType::Human, 1500.0);
+        let similar_player = create_test_player("player2", PlayerType::Human, 1520.0);
+        let different_player = create_test_player("player3", PlayerType::Human, 2000.0);
 
-        // Should work the same as basic matcher when rating matching is disabled
-        let result = matcher
-            .find_lobby_for_player(&bot, &lobbies, &config)
-            .unwrap();
-        assert!(matches!(result, MatchingResult::MatchedToLobby(_)));
+        let mut similar_lobby = LobbyInstance::new(LobbyConfiguration::general());
+        let mut different_lobby = LobbyInstance::new(LobbyConfiguration::general());
+
+        similar_lobby.add_player(similar_player).unwrap();
+        different_lobby.add_player(different_player).unwrap();
+
+        let similar_score = matcher.calculate_lobby_score(&player, &similar_lobby, &config);
+        let different_score = matcher.calculate_lobby_score(&player, &different_lobby, &config);
+
+        // Should prefer lobby with similar rating
+        assert!(similar_score > different_score);
     }
 }

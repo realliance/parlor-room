@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use skillratings::weng_lin::{weng_lin_multi_team, WengLinConfig, WengLinRating};
 use skillratings::MultiTeamOutcome;
 use std::collections::HashMap;
-use tracing::{debug, warn};
+use tracing::warn;
 
 /// Extended configuration for the Weng-Lin rating system
 /// This wraps the skillratings WengLinConfig with additional parameters

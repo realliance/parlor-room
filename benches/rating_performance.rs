@@ -110,7 +110,6 @@ fn bench_single_queue_request(c: &mut Criterion) {
                         uncertainty: 200.0,
                     },
                     timestamp: parlor_room::utils::current_timestamp(),
-                    auth_token: None,
                 };
 
                 black_box(lobby_manager.handle_queue_request(request).await)
@@ -130,15 +129,14 @@ fn bench_lobby_statistics(c: &mut Criterion) {
                 // Add some load first
                 for i in 0..5 {
                     let request = QueueRequest {
-                        player_id: format!("stats_player_{}", i),
+                        player_id: format!("player_{}", i),
                         player_type: PlayerType::Human,
                         lobby_type: LobbyType::General,
                         current_rating: PlayerRating {
-                            rating: 1500.0,
+                            rating: 1500.0 + (i as f64 * 10.0),
                             uncertainty: 200.0,
                         },
                         timestamp: parlor_room::utils::current_timestamp(),
-                        auth_token: None,
                     };
                     let _ = lobby_manager.handle_queue_request(request).await;
                 }

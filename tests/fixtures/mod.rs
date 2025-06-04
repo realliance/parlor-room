@@ -78,12 +78,10 @@ impl EventPublisher for MockEventPublisher {
     }
 }
 
-/// Integration test bot provider with configurable behavior
-#[derive(Debug)]
+/// Integration test bot provider that simulates realistic bot behavior
 pub struct IntegrationBotProvider {
     bots: Arc<Mutex<HashMap<String, Player>>>,
     reserved_bots: Arc<Mutex<Vec<String>>>,
-    auth_tokens: Arc<Mutex<HashMap<String, String>>>,
     backfill_delay_ms: u64,
 }
 
@@ -92,7 +90,6 @@ impl IntegrationBotProvider {
         let provider = Self {
             bots: Arc::new(Mutex::new(HashMap::new())),
             reserved_bots: Arc::new(Mutex::new(Vec::new())),
-            auth_tokens: Arc::new(Mutex::new(HashMap::new())),
             backfill_delay_ms: 10, // Small delay to simulate real-world latency
         };
 
@@ -104,20 +101,20 @@ impl IntegrationBotProvider {
     /// Set up realistic test bots with varied ratings
     fn setup_test_bots(&self) {
         let test_bots = vec![
-            ("skilled_bot_1", 1800.0, 120.0, "token_skilled_1"),
-            ("skilled_bot_2", 1750.0, 130.0, "token_skilled_2"),
-            ("average_bot_1", 1500.0, 200.0, "token_average_1"),
-            ("average_bot_2", 1450.0, 180.0, "token_average_2"),
-            ("average_bot_3", 1550.0, 190.0, "token_average_3"),
-            ("beginner_bot_1", 1200.0, 250.0, "token_beginner_1"),
-            ("beginner_bot_2", 1150.0, 280.0, "token_beginner_2"),
-            ("expert_bot_1", 2000.0, 100.0, "token_expert_1"),
-            ("newbie_bot_1", 1500.0, 350.0, "token_newbie_1"), // High uncertainty
-            ("consistent_bot_1", 1600.0, 80.0, "token_consistent_1"), // Low uncertainty
+            ("skilled_bot_1", 1800.0, 120.0),
+            ("skilled_bot_2", 1750.0, 130.0),
+            ("average_bot_1", 1500.0, 200.0),
+            ("average_bot_2", 1450.0, 180.0),
+            ("average_bot_3", 1550.0, 190.0),
+            ("beginner_bot_1", 1200.0, 250.0),
+            ("beginner_bot_2", 1150.0, 280.0),
+            ("expert_bot_1", 2000.0, 100.0),
+            ("newbie_bot_1", 1500.0, 350.0),    // High uncertainty
+            ("consistent_bot_1", 1600.0, 80.0), // Low uncertainty
         ];
 
-        if let (Ok(mut bots), Ok(mut tokens)) = (self.bots.lock(), self.auth_tokens.lock()) {
-            for (bot_id, rating, uncertainty, token) in test_bots {
+        if let Ok(mut bots) = self.bots.lock() {
+            for (bot_id, rating, uncertainty) in test_bots {
                 let bot = Player {
                     id: bot_id.to_string(),
                     player_type: PlayerType::Bot,
@@ -128,7 +125,6 @@ impl IntegrationBotProvider {
                     joined_at: current_timestamp(),
                 };
                 bots.insert(bot_id.to_string(), bot);
-                tokens.insert(bot_id.to_string(), token.to_string());
             }
         }
     }
@@ -208,16 +204,6 @@ impl BotProvider for IntegrationBotProvider {
         Ok(suitable_bots)
     }
 
-    async fn validate_bot_request(&self, bot_id: &str, auth_token: &str) -> Result<bool> {
-        let tokens = self.auth_tokens.lock().map_err(|_| {
-            parlor_room::error::MatchmakingError::InternalError {
-                message: "Failed to acquire tokens lock".to_string(),
-            }
-        })?;
-
-        Ok(tokens.get(bot_id).is_some_and(|token| token == auth_token))
-    }
-
     async fn get_bot(&self, bot_id: &str) -> Result<Option<Player>> {
         let bots =
             self.bots
@@ -260,23 +246,19 @@ impl BotProvider for IntegrationBotProvider {
     }
 
     async fn is_bot_available(&self, bot_id: &str) -> Result<bool> {
-        let (bots, reserved) = {
-            let bots_guard = self.bots.lock().map_err(|_| {
-                parlor_room::error::MatchmakingError::InternalError {
+        let bots =
+            self.bots
+                .lock()
+                .map_err(|_| parlor_room::error::MatchmakingError::InternalError {
                     message: "Failed to acquire bots lock".to_string(),
-                }
-            })?;
-            let reserved_guard = self.reserved_bots.lock().map_err(|_| {
-                parlor_room::error::MatchmakingError::InternalError {
-                    message: "Failed to acquire reserved lock".to_string(),
-                }
-            })?;
-            (
-                bots_guard.contains_key(bot_id),
-                reserved_guard.contains(&bot_id.to_string()),
-            )
-        };
+                })?;
 
-        Ok(bots && !reserved)
+        let reserved = self.reserved_bots.lock().map_err(|_| {
+            parlor_room::error::MatchmakingError::InternalError {
+                message: "Failed to acquire reserved lock".to_string(),
+            }
+        })?;
+
+        Ok(bots.contains_key(bot_id) && !reserved.contains(&bot_id.to_string()))
     }
 }
