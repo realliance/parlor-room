@@ -7,8 +7,8 @@ A rating-based matchmaking for bot and human-bot mahjong games
 ### Core Matchmaking
 
 - **Multi-lobby Support**: All Bot (immediate 4-bot games) and General (mixed human/bot) lobbies
-- **Smart Player Matching**: Rating-based matching with configurable tolerance
-- **Dynamic Wait Time Calculation**: Statistical analysis of historical wait times
+- **Rank Based Player Matching**: Rating-based matching with configurable tolerance based on OpenSkill.
+- **Dynamic Wait Time Calculation**: Statistical analysis of historical wait times to mitigate human waits.
 - **Bot Backfilling**: Automatic bot addition with rating compatibility
 
 ## 📋 Quick Start

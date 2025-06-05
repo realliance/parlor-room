@@ -576,12 +576,16 @@ mod tests {
         let valid_config = BackfillConfig::default();
         assert!(valid_config.validate().is_ok());
 
-        let mut invalid_config = BackfillConfig::default();
-        invalid_config.max_rating_tolerance = -1.0;
+        let invalid_config = BackfillConfig {
+            max_rating_tolerance: -1.0,
+            ..Default::default()
+        };
         assert!(invalid_config.validate().is_err());
 
-        invalid_config = BackfillConfig::default();
-        invalid_config.min_humans_for_backfill = 0;
+        let invalid_config = BackfillConfig {
+            min_humans_for_backfill: 0,
+            ..Default::default()
+        };
         assert!(invalid_config.validate().is_err());
     }
 
