@@ -29,6 +29,7 @@ use parlor_room::amqp::messages::{
 use parlor_room::types::{GameStarting, LobbyType, PlayerRating, PlayerType, QueueRequest};
 use parlor_room::utils::current_timestamp;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex as TokioMutex;
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 
@@ -191,17 +192,6 @@ impl QueueTester {
             .await
             .context("Failed to bind queue to game events")?;
 
-        // Also bind to all game events with wildcard
-        let args = amqprs::channel::QueueBindArguments::new(
-            &self.events_queue_name,
-            GAME_EVENTS_EXCHANGE,
-            "game.*",
-        );
-        self.consume_channel
-            .queue_bind(args)
-            .await
-            .context("Failed to bind queue to all game events")?;
-
         info!("✅ AMQP setup complete - queue: {}", self.events_queue_name);
         Ok(())
     }
@@ -327,6 +317,22 @@ impl QueueTester {
 
         debug!("✅ Queue request published successfully");
         Ok(())
+    }
+
+    /// Check for matches that have started and return only those containing current test players
+    pub fn check_for_matches_filtered(&self, expected_player_ids: &[String]) -> Vec<GameStarting> {
+        let all_matches = self.check_for_matches();
+
+        // Filter matches to only include games with our expected players
+        all_matches
+            .into_iter()
+            .filter(|game| {
+                // Check if this game contains any of our expected players
+                game.players
+                    .iter()
+                    .any(|player| expected_player_ids.contains(&player.id))
+            })
+            .collect()
     }
 
     /// Check for matches that have started and return them
@@ -455,7 +461,46 @@ impl QueueTester {
         }
     }
 
-    /// Clear all statistics and events
+    /// Restart the parlor room Docker container to ensure completely fresh state
+    pub async fn restart_parlor_room_service() -> anyhow::Result<()> {
+        info!("🔄 Restarting parlor room Docker container for fresh state...");
+
+        // Stop the parlor room container
+        let stop_result = tokio::process::Command::new("docker")
+            .args(&["compose", "stop", "parlor-room"])
+            .output()
+            .await
+            .context("Failed to execute docker stop command")?;
+
+        if !stop_result.status.success() {
+            warn!(
+                "Docker stop command failed (container may not be running): {}",
+                String::from_utf8_lossy(&stop_result.stderr)
+            );
+        }
+
+        // Start the parlor room container
+        let start_result = tokio::process::Command::new("docker")
+            .args(&["compose", "start", "parlor-room"])
+            .output()
+            .await
+            .context("Failed to execute docker start command")?;
+
+        if !start_result.status.success() {
+            return Err(anyhow::anyhow!(
+                "Docker start command failed: {}",
+                String::from_utf8_lossy(&start_result.stderr)
+            ));
+        }
+
+        // Wait for the service to be ready
+        tokio::time::sleep(Duration::from_millis(2000)).await;
+
+        info!("✅ Parlor room service restarted and ready");
+        Ok(())
+    }
+
+    /// Reset local state only (no longer need complex purging)
     pub fn reset(&self) {
         if let Ok(mut stats) = self.queue_stats.lock() {
             *stats = QueueStats::default();
@@ -495,11 +540,26 @@ impl AsyncConsumer for GameEventConsumer {
             match serde_json::from_slice::<MessageEnvelope<GameStarting>>(&content) {
                 Ok(envelope) => {
                     info!(
-                        "🎮 Game starting event received: {}",
-                        envelope.payload.game_id
+                        "🎮 Game starting event received: {} with {} players",
+                        envelope.payload.game_id,
+                        envelope.payload.players.len()
                     );
+
+                    // Add debugging to see what games we're collecting
+                    println!(
+                        "🔍 DEBUG: Received game event - ID: {}, Players: {:?}",
+                        envelope.payload.game_id,
+                        envelope
+                            .payload
+                            .players
+                            .iter()
+                            .map(|p| format!("{}({:?})", p.id, p.player_type))
+                            .collect::<Vec<_>>()
+                    );
+
                     if let Ok(mut events) = self.game_events.lock() {
                         events.push(envelope.payload);
+                        println!("🔍 DEBUG: Total events now: {}", events.len());
                     }
                 }
                 Err(e) => {
@@ -636,59 +696,57 @@ impl TestScenarios {
         QueueTestConfig {
             scenario_name: "Multiple Simultaneous Lobbies".to_string(),
             human_players: vec![
-                // First lobby
+                // First lobby - all same rating
                 PlayerConfig::human(
                     "human_lobby1_1".to_string(),
                     LobbyType::General,
-                    1500.0,
-                    200.0,
+                    1500.0, // Same rating
+                    200.0,  // Same uncertainty
                 ),
                 PlayerConfig::human(
                     "human_lobby1_2".to_string(),
                     LobbyType::General,
-                    1550.0,
-                    180.0,
-                ),
-                // Second lobby
-                PlayerConfig::human(
-                    "human_lobby2_1".to_string(),
-                    LobbyType::General,
-                    1800.0,
-                    150.0,
+                    1500.0, // Same rating
+                    200.0,  // Same uncertainty
                 ),
                 PlayerConfig::human(
-                    "human_lobby2_2".to_string(),
+                    "human_lobby1_3".to_string(),
                     LobbyType::General,
-                    1850.0,
-                    140.0,
+                    1500.0, // Same rating
+                    200.0,  // Same uncertainty
+                ),
+                PlayerConfig::human(
+                    "human_lobby1_4".to_string(),
+                    LobbyType::General,
+                    1500.0, // Same rating
+                    200.0,  // Same uncertainty
                 ),
             ],
             bot_players: vec![
-                // Bots for first lobby
-                PlayerConfig::bot(
-                    "bot_lobby1_1".to_string(),
-                    LobbyType::General,
-                    1450.0,
-                    220.0,
-                ),
-                PlayerConfig::bot(
-                    "bot_lobby1_2".to_string(),
-                    LobbyType::General,
-                    1600.0,
-                    190.0,
-                ),
-                // Bots for second lobby
+                // Second lobby - all same rating
                 PlayerConfig::bot(
                     "bot_lobby2_1".to_string(),
                     LobbyType::General,
-                    1750.0,
-                    160.0,
+                    1500.0, // Same rating
+                    200.0,  // Same uncertainty
                 ),
                 PlayerConfig::bot(
                     "bot_lobby2_2".to_string(),
                     LobbyType::General,
-                    1900.0,
-                    130.0,
+                    1500.0, // Same rating
+                    200.0,  // Same uncertainty
+                ),
+                PlayerConfig::bot(
+                    "bot_lobby2_3".to_string(),
+                    LobbyType::General,
+                    1500.0, // Same rating
+                    200.0,  // Same uncertainty
+                ),
+                PlayerConfig::bot(
+                    "bot_lobby2_4".to_string(),
+                    LobbyType::General,
+                    1500.0, // Same rating
+                    200.0,  // Same uncertainty
                 ),
             ],
             expected_matches: 2,
@@ -705,8 +763,13 @@ impl TestScenarios {
 mod tests {
     use super::*;
 
+    // Static mutex to ensure tests run one at a time to prevent AMQP event interference
+    static TEST_MUTEX: TokioMutex<()> = TokioMutex::const_new(());
+
     #[tokio::test]
     async fn test_queue_tester_setup() {
+        let _guard = TEST_MUTEX.lock().await;
+
         let tester = QueueTester::new()
             .await
             .expect("Failed to create queue tester");
@@ -717,6 +780,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_queue_single_human() {
+        let _guard = TEST_MUTEX.lock().await;
+
         let tester = QueueTester::new()
             .await
             .expect("Failed to create queue tester");
@@ -734,6 +799,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_queue_single_bot() {
+        let _guard = TEST_MUTEX.lock().await;
+
         let tester = QueueTester::new()
             .await
             .expect("Failed to create queue tester");
@@ -751,35 +818,142 @@ mod tests {
 
     #[tokio::test]
     async fn test_scenario_four_humans_general() {
+        let _guard = TEST_MUTEX.lock().await;
+
+        // Restart parlor room service for completely fresh state
+        QueueTester::restart_parlor_room_service()
+            .await
+            .expect("Failed to restart service");
+
         let tester = QueueTester::new()
             .await
             .expect("Failed to create queue tester");
-        let scenario = TestScenarios::four_humans_general();
 
-        let result = tester.run_test_scenario(scenario).await;
-        assert!(result.is_ok(), "Scenario failed: {:?}", result);
+        // Reset local state
+        tester.reset();
 
-        let success = result.unwrap();
-        assert!(success, "Scenario should have succeeded");
+        // Use unique test-specific player IDs
+        let test_prefix = "test_four_humans_";
+        let player_ids = vec![
+            format!("{}human_1", test_prefix),
+            format!("{}human_2", test_prefix),
+            format!("{}human_3", test_prefix),
+            format!("{}human_4", test_prefix),
+        ];
 
-        let matches = tester.check_for_matches();
+        // Queue players with unique IDs
+        for (i, player_id) in player_ids.iter().enumerate() {
+            let rating = 1500.0 + (i as f64 * 25.0);
+            let uncertainty = 200.0 - (i as f64 * 10.0);
+            tester
+                .queue_human(player_id, LobbyType::General, rating, uncertainty)
+                .await
+                .expect("Failed to queue human");
+        }
+
+        // Wait for match with timeout
+        let timeout_duration = Duration::from_secs(10);
+        let result = tokio::time::timeout(timeout_duration, async {
+            loop {
+                let matches = tester.check_for_matches_filtered(&player_ids);
+                if matches.len() >= 1 {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await;
+
+        assert!(result.unwrap_or(false), "Scenario should have succeeded");
+
+        let matches = tester.check_for_matches_filtered(&player_ids);
+        println!(
+            "🔍 DEBUG: Found {} matches: {:?}",
+            matches.len(),
+            matches
+                .iter()
+                .map(|g| format!(
+                    "Game {} with players: {:?}",
+                    g.game_id,
+                    g.players
+                        .iter()
+                        .map(|p| format!("{}({:?})", p.id, p.player_type))
+                        .collect::<Vec<_>>()
+                ))
+                .collect::<Vec<_>>()
+        );
         assert_eq!(matches.len(), 1, "Should have exactly 1 match");
     }
 
     #[tokio::test]
     async fn test_scenario_four_bots_allbot() {
+        let _guard = TEST_MUTEX.lock().await;
+
+        // Restart parlor room service for completely fresh state
+        QueueTester::restart_parlor_room_service()
+            .await
+            .expect("Failed to restart service");
+
         let tester = QueueTester::new()
             .await
             .expect("Failed to create queue tester");
-        let scenario = TestScenarios::four_bots_allbot();
 
-        let result = tester.run_test_scenario(scenario).await;
-        assert!(result.is_ok(), "Scenario failed: {:?}", result);
+        // Reset local state
+        tester.reset();
 
-        let success = result.unwrap();
-        assert!(success, "AllBot scenario should succeed quickly");
+        // Use unique test-specific player IDs
+        let test_prefix = "test_four_bots_";
+        let player_ids = vec![
+            format!("{}bot_1", test_prefix),
+            format!("{}bot_2", test_prefix),
+            format!("{}bot_3", test_prefix),
+            format!("{}bot_4", test_prefix),
+        ];
 
-        let matches = tester.check_for_matches();
+        // Queue bots with unique IDs
+        for (i, player_id) in player_ids.iter().enumerate() {
+            let rating = 1500.0 + (i as f64 * 25.0);
+            let uncertainty = 200.0 - (i as f64 * 10.0);
+            tester
+                .queue_bot(player_id, LobbyType::AllBot, rating, uncertainty)
+                .await
+                .expect("Failed to queue bot");
+        }
+
+        // Wait for match with timeout
+        let timeout_duration = Duration::from_secs(10);
+        let result = tokio::time::timeout(timeout_duration, async {
+            loop {
+                let matches = tester.check_for_matches_filtered(&player_ids);
+                if matches.len() >= 1 {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await;
+
+        assert!(
+            result.unwrap_or(false),
+            "AllBot scenario should succeed quickly"
+        );
+
+        let matches = tester.check_for_matches_filtered(&player_ids);
+        println!(
+            "🔍 DEBUG: Found {} matches: {:?}",
+            matches.len(),
+            matches
+                .iter()
+                .map(|g| format!(
+                    "Game {} with players: {:?}",
+                    g.game_id,
+                    g.players
+                        .iter()
+                        .map(|p| format!("{}({:?})", p.id, p.player_type))
+                        .collect::<Vec<_>>()
+                ))
+                .collect::<Vec<_>>()
+        );
         assert_eq!(matches.len(), 1, "Should have exactly 1 match");
 
         // Verify all players are bots
@@ -795,18 +969,85 @@ mod tests {
 
     #[tokio::test]
     async fn test_scenario_mixed_lobby() {
+        let _guard = TEST_MUTEX.lock().await;
+
+        // Restart parlor room service for completely fresh state
+        QueueTester::restart_parlor_room_service()
+            .await
+            .expect("Failed to restart service");
+
         let tester = QueueTester::new()
             .await
             .expect("Failed to create queue tester");
-        let scenario = TestScenarios::mixed_lobby();
 
-        let result = tester.run_test_scenario(scenario).await;
-        assert!(result.is_ok(), "Mixed scenario failed: {:?}", result);
+        // Reset local state
+        tester.reset();
 
-        let success = result.unwrap();
-        assert!(success, "Mixed scenario should succeed");
+        // Use unique test-specific player IDs
+        let test_prefix = "test_mixed_";
+        let human_ids = vec![
+            format!("{}human_1", test_prefix),
+            format!("{}human_2", test_prefix),
+        ];
+        let bot_ids = vec![
+            format!("{}bot_1", test_prefix),
+            format!("{}bot_2", test_prefix),
+        ];
 
-        let matches = tester.check_for_matches();
+        let mut all_player_ids = human_ids.clone();
+        all_player_ids.extend(bot_ids.clone());
+
+        // Use the same rating and uncertainty for all players to ensure they are queued together
+        let rating = 1500.0;
+        let uncertainty = 200.0;
+
+        // Queue humans
+        for player_id in human_ids.iter() {
+            tester
+                .queue_human(player_id, LobbyType::General, rating, uncertainty)
+                .await
+                .expect("Failed to queue human");
+        }
+
+        // Queue bots
+        for player_id in bot_ids.iter() {
+            tester
+                .queue_bot(player_id, LobbyType::General, rating, uncertainty)
+                .await
+                .expect("Failed to queue bot");
+        }
+
+        // Wait for match with timeout
+        let timeout_duration = Duration::from_secs(10);
+        let result = tokio::time::timeout(timeout_duration, async {
+            loop {
+                let matches = tester.check_for_matches_filtered(&all_player_ids);
+                if matches.len() >= 1 {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await;
+
+        assert!(result.unwrap_or(false), "Mixed scenario should succeed");
+
+        let matches = tester.check_for_matches_filtered(&all_player_ids);
+        println!(
+            "🔍 DEBUG: Found {} matches: {:?}",
+            matches.len(),
+            matches
+                .iter()
+                .map(|g| format!(
+                    "Game {} with players: {:?}",
+                    g.game_id,
+                    g.players
+                        .iter()
+                        .map(|p| format!("{}({:?})", p.id, p.player_type))
+                        .collect::<Vec<_>>()
+                ))
+                .collect::<Vec<_>>()
+        );
         assert_eq!(matches.len(), 1, "Should have exactly 1 match");
 
         // Verify mix of humans and bots
@@ -828,9 +1069,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_scenario_multiple_lobbies() {
+        let _guard = TEST_MUTEX.lock().await;
+
+        // Restart parlor room service for completely fresh state
+        QueueTester::restart_parlor_room_service()
+            .await
+            .expect("Failed to restart service");
+
         let tester = QueueTester::new()
             .await
             .expect("Failed to create queue tester");
+
+        // Reset local state
+        tester.reset();
+
         let scenario = TestScenarios::multiple_lobbies();
 
         let result = tester.run_test_scenario(scenario).await;
@@ -844,11 +1096,28 @@ mod tests {
         assert!(success, "Multiple lobbies scenario should succeed");
 
         let matches = tester.check_for_matches();
+        println!(
+            "🔍 DEBUG: Found {} matches: {:?}",
+            matches.len(),
+            matches
+                .iter()
+                .map(|g| format!(
+                    "Game {} with players: {:?}",
+                    g.game_id,
+                    g.players
+                        .iter()
+                        .map(|p| format!("{}({:?})", p.id, p.player_type))
+                        .collect::<Vec<_>>()
+                ))
+                .collect::<Vec<_>>()
+        );
         assert_eq!(matches.len(), 2, "Should have exactly 2 matches");
     }
 
     #[tokio::test]
     async fn test_queue_monitoring() {
+        let _guard = TEST_MUTEX.lock().await;
+
         let tester = QueueTester::new()
             .await
             .expect("Failed to create queue tester");

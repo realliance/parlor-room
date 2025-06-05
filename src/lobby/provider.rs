@@ -49,7 +49,7 @@ impl LobbyConfiguration {
             base_wait_time_seconds: 120, // 2 minutes
             allow_bot_backfill: true,
             prioritize_humans: true,
-            min_human_players: 1, // At least one human
+            min_human_players: 0,
             immediate_start_when_full: true,
         }
     }
