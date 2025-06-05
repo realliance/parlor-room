@@ -119,6 +119,101 @@ cargo bench
 }
 ```
 
+### Game Starting Event Format
+
+When a lobby is full and a game is ready to start, the service publishes a `GameStarting` event with the following structure:
+
+```jsonc
+{
+  "lobby_id": "550e8400-e29b-41d4-a716-446655440000",
+  "game_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+  "players": [
+    {
+      "id": "player_123",
+      "player_type": "Human",
+      "rating": {
+        "rating": 1500.0,
+        "uncertainty": 350.0
+      },
+      "joined_at": "2024-01-15T10:30:45.123456Z"
+    }
+    // + 3 more players
+  ],
+  "rating_scenarios": {
+    "scenarios": [
+      {
+        "player_id": "player_123",
+        "rank": 1,
+        "current_rating": {
+          "rating": 1500.0,
+          "uncertainty": 350.0
+        },
+        "predicted_rating": {
+          "rating": 1532.5,
+          "uncertainty": 320.0
+        },
+        "rating_delta": 32.5
+      }
+      // Precalculated rating placement scenarios (16 total)
+    ],
+    "player_ranges": [
+      {
+        "player_id": "player_123",
+        "current_rating": {
+          "rating": 1500.0,
+          "uncertainty": 350.0
+        },
+        "best_case_rating": {
+          "rating": 1532.5,
+          "uncertainty": 320.0
+        },
+        "worst_case_rating": {
+          "rating": 1468.2,
+          "uncertainty": 320.0
+        },
+        "max_gain": 32.5,
+        "max_loss": -31.8
+      }
+      // + 3 more player score overviews
+    ]
+  },
+  "timestamp": "2024-01-15T10:30:55.123456Z"
+}
+```
+
+### Player Left Lobby Event Format
+
+When a player leaves a lobby (due to disconnect, quit, timeout, etc.), the service publishes a `PlayerLeftLobby` event:
+
+```jsonc
+{
+  "lobby_id": "550e8400-e29b-41d4-a716-446655440000",
+  "player_id": "player_456",
+  "reason": "Disconnect",
+  "remaining_players": [
+    {
+      "id": "player_123",
+      "player_type": "Human",
+      "rating": {
+        "rating": 1500.0,
+        "uncertainty": 350.0
+      },
+      "joined_at": "2024-01-15T10:30:45.123456Z"
+    }
+    // + remaining players still in lobby
+  ],
+  "timestamp": "2024-01-15T10:32:10.456789Z"
+}
+```
+
+**Leave Reasons:**
+
+- `Disconnect` - Player connection lost
+- `UserQuit` - Player manually left
+- `Timeout` - Player inactive too long
+- `SystemError` - Internal system error
+- `BotReplacement` - Bot was replaced by human player
+
 ### Event Publishing
 
 The service publishes events to configured AMQP exchanges:
@@ -126,47 +221,3 @@ The service publishes events to configured AMQP exchanges:
 - `PlayerJoinedLobby`: When a player joins a lobby
 - `PlayerLeftLobby`: When a player leaves
 - `GameStarting`: When a lobby is full and game begins
-
-## 🧩 Development
-
-### Architecture Modules
-
-```
-src/
-├── amqp/          # Message queue integration
-├── bot/           # Bot management and backfilling
-├── config/        # Configuration management
-├── lobby/         # Core matchmaking logic
-├── rating/        # Weng-Lin rating system
-├── service/       # Production service coordination
-├── wait_time/     # Dynamic wait time calculation
-└── main.rs        # Service entry point
-```
-
-### Adding New Features
-
-1. **New Lobby Types**: Extend `LobbyType` enum and update `LobbyConfiguration`
-2. **Rating Algorithms**: Implement `RatingCalculator` trait
-3. **Bot Providers**: Implement `BotProvider` trait for different bot sources
-4. **Event Types**: Add new events to `amqp::messages` module
-
-## Metrics and Monitoring
-
-The parlor-room service includes comprehensive metrics collection and monitoring capabilities:
-
-### Metrics Endpoints
-
-- **Health Check**: `GET /health` - Service health status
-- **Readiness**: `GET /ready` - Service readiness status
-- **Liveness**: `GET /alive` - Service liveness status
-- **Prometheus Metrics**: `GET /metrics` - Prometheus-formatted metrics
-- **Statistics**: `GET /stats` - Human-readable service statistics
-
-### Available Metrics
-
-#### Service Metrics
-
-- `parlor_room_uptime_seconds` - Service uptime in seconds
-- `parlor_room_health_status` - Overall health status (0=unhealthy, 1=degraded, 2=healthy)
-- `parlor_room_amqp_messages_total` - Total AMQP messages processed
-- `
