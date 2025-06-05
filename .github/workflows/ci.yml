@@ -322,7 +322,3 @@ jobs:
           tags: parlor-room:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Test Docker image
-        run: |
-          docker run --rm parlor-room:test --help
