@@ -29,6 +29,7 @@ use parlor_room::amqp::messages::{
 use parlor_room::types::{GameStarting, LobbyType, PlayerRating, PlayerType, QueueRequest};
 use parlor_room::utils::current_timestamp;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use tokio::sync::Mutex as TokioMutex;
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
@@ -320,6 +321,7 @@ impl QueueTester {
     }
 
     /// Check for matches that have started and return only those containing current test players
+    #[cfg(test)]
     pub fn check_for_matches_filtered(&self, expected_player_ids: &[String]) -> Vec<GameStarting> {
         let all_matches = self.check_for_matches();
 
@@ -462,12 +464,13 @@ impl QueueTester {
     }
 
     /// Restart the parlor room Docker container to ensure completely fresh state
+    #[cfg(test)]
     pub async fn restart_parlor_room_service() -> anyhow::Result<()> {
         info!("🔄 Restarting parlor room Docker container for fresh state...");
 
         // Stop the parlor room container
         let stop_result = tokio::process::Command::new("docker")
-            .args(&["compose", "stop", "parlor-room"])
+            .args(["compose", "stop", "parlor-room"])
             .output()
             .await
             .context("Failed to execute docker stop command")?;
@@ -481,7 +484,7 @@ impl QueueTester {
 
         // Start the parlor room container
         let start_result = tokio::process::Command::new("docker")
-            .args(&["compose", "start", "parlor-room"])
+            .args(["compose", "start", "parlor-room"])
             .output()
             .await
             .context("Failed to execute docker start command")?;
@@ -856,7 +859,7 @@ mod tests {
         let result = tokio::time::timeout(timeout_duration, async {
             loop {
                 let matches = tester.check_for_matches_filtered(&player_ids);
-                if matches.len() >= 1 {
+                if !matches.is_empty() {
                     return true;
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -925,7 +928,7 @@ mod tests {
         let result = tokio::time::timeout(timeout_duration, async {
             loop {
                 let matches = tester.check_for_matches_filtered(&player_ids);
-                if matches.len() >= 1 {
+                if !matches.is_empty() {
                     return true;
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1022,7 +1025,7 @@ mod tests {
         let result = tokio::time::timeout(timeout_duration, async {
             loop {
                 let matches = tester.check_for_matches_filtered(&all_player_ids);
-                if matches.len() >= 1 {
+                if !matches.is_empty() {
                     return true;
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
